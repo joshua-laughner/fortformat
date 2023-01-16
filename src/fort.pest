@@ -1,0 +1,22 @@
+WHITESPACE = _{ " " }
+repeat = { ASCII_DIGIT+ }
+width = { ASCII_DIGIT+ }
+prec = { ASCII_DIGIT+ }
+
+skip = ${ ^"x" }
+char = ${ ^"a" ~ width? }
+
+logical = ${ ^"l" ~ width }
+
+integer = ${ ^"i" ~ (width ~ ("." ~ prec)?)? }
+octal = ${ ^"o" ~ (width ~ ("." ~ prec)?)? }
+hex = ${ ^"z" ~ (width ~ ("." ~ prec)?)? }
+
+real = ${ ^"f" ~ (width ~ ("." ~ prec)?)? }
+realorexp = ${ ^"g" ~ (width ~ ("." ~ prec)?)? }
+exponential = ${ ^"e" ~ (width ~ ("." ~ prec)?)? }
+expdouble = ${ ^"d" ~ (width ~ ("." ~ prec)?)? }
+
+
+field = ${ repeat? ~ (skip | char | integer | logical | octal | hex) }
+expr = { SOI ~ "(" ~ field ~ (","? ~ field)* ~ ")" ~ EOI}
