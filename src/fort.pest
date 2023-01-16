@@ -1,4 +1,4 @@
-WHITESPACE = _{ " " }
+WHITESPACE = _{ " " | "\t" }
 repeat = { ASCII_DIGIT+ }
 width = { ASCII_DIGIT+ }
 prec = { ASCII_DIGIT+ }
@@ -17,6 +17,8 @@ realorexp = ${ ^"g" ~ (width ~ ("." ~ prec)?)? }
 exponential = ${ ^"e" ~ (width ~ ("." ~ prec)?)? }
 expdouble = ${ ^"d" ~ (width ~ ("." ~ prec)?)? }
 
-
+scale = ${ prec? ~ ^"p" }
 field = ${ repeat? ~ (skip | char | integer | logical | octal | hex) }
-expr = { SOI ~ "(" ~ field ~ (","? ~ field)* ~ ")" ~ EOI}
+element = { scale | field | (repeat? ~ expr) }
+expr = { "(" ~ element ~ (","? ~ element)* ~ ")" }
+format = { SOI ~ expr ~ EOI}
