@@ -2,6 +2,7 @@ WHITESPACE = _{ " " | "\t" }
 repeat = { ASCII_DIGIT+ }
 width = { ASCII_DIGIT+ }
 prec = { ASCII_DIGIT+ }
+signed = @{ ("-" | "+")? ~ ASCII_DIGIT+ }
 
 skip = ${ ^"x" }
 char = ${ ^"a" ~ width? }
@@ -9,16 +10,16 @@ char = ${ ^"a" ~ width? }
 logical = ${ ^"l" ~ width }
 
 integer = ${ ^"i" ~ (width ~ ("." ~ prec)?)? }
-octal = ${ ^"o" ~ (width ~ ("." ~ prec)?)? }
-hex = ${ ^"z" ~ (width ~ ("." ~ prec)?)? }
+octal = ${ ^"o" ~ width ~ ("." ~ prec)? }
+hex = ${ ^"z" ~ width ~ ("." ~ prec)? }
 
 real = ${ ^"f" ~ (width ~ ("." ~ prec)?)? }
 realorexp = ${ ^"g" ~ (width ~ ("." ~ prec)?)? }
 exponential = ${ ^"e" ~ (width ~ ("." ~ prec)?)? }
 expdouble = ${ ^"d" ~ (width ~ ("." ~ prec)?)? }
 
-scale = ${ prec? ~ ^"p" }
-field = ${ repeat? ~ (skip | char | integer | logical | octal | hex) }
-element = { scale | field | (repeat? ~ expr) }
+scale = ${ signed? ~ ^"p" }
+field = ${ repeat? ~ (skip | char | integer | logical | octal | hex | real | realorexp | exponential | expdouble ) }
 expr = { "(" ~ element ~ (","? ~ element)* ~ ")" }
-format = { SOI ~ expr ~ EOI}
+element = { scale | field | (repeat? ~ expr) }
+format = { SOI ~ element ~ EOI}
