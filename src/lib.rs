@@ -173,7 +173,7 @@ fn consume_width(stack: &mut Vec<Pair<Rule>>) -> Option<u32> {
     }
 }
 
-fn consume_prec_from_pair(pair: Pair<Rule>) -> Option<u32> {
+fn _consume_prec_from_pair(pair: Pair<Rule>) -> Option<u32> {
     let mut stack: Vec<_> = pair.into_inner().rev().collect();
     consume_prec(&mut stack)
 }
@@ -208,16 +208,7 @@ fn consume_width_and_prec(stack: &mut Vec<Pair<Rule>>) -> (Option<u32>, Option<u
         return (None, None)
     };
 
-    let prec = if let Some(last) = stack.last() {
-        if let Rule::prec = last.as_rule() {
-            let p = stack.pop().unwrap().as_str().parse().unwrap();
-            Some(p)
-        }else{
-            None
-        }
-    }else{
-        None
-    };
+    let prec = consume_prec(stack);
 
     (width, prec)
 }
