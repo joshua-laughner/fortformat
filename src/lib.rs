@@ -2,6 +2,8 @@ extern crate pest;
 #[macro_use]
 extern crate pest_derive;
 
+use std::fmt::Display;
+
 use pest::{Parser, iterators::Pair, RuleType};
 
 type Result<T> = std::result::Result<T, ParseError>;
@@ -19,7 +21,7 @@ impl <R: RuleType> From<pest::error::Error<R>> for ParseError {
 #[grammar = "fort.pest"]
 pub struct FortParser;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RealFmt {
     D,
     E,
@@ -27,14 +29,39 @@ pub enum RealFmt {
     G
 }
 
-#[derive(Debug, Clone, Copy)]
+impl Display for RealFmt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            RealFmt::D => "d",
+            RealFmt::E => "e",
+            RealFmt::F => "f",
+            RealFmt::G => "g",
+        };
+
+        write!(f, "{s}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntBase {
     Decimal,
     Octal,
     Hexadecimal
 }
 
-#[derive(Debug, Clone, Copy)]
+impl Display for IntBase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            IntBase::Decimal => "i",
+            IntBase::Octal => "o",
+            IntBase::Hexadecimal => "z",
+        };
+
+        write!(f, "{s}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FortField {
     Char{width: Option<u32>},
     Logical{width: u32},
@@ -157,6 +184,10 @@ impl FortFormat {
 
         Ok(Self { fields })
     }
+
+    pub fn into_fields(self) -> Vec<FortField> {
+        self.fields
+    }
 }
 
 fn consume_width_from_pair(pair: Pair<Rule>) -> Option<u32> {
@@ -224,41 +255,205 @@ fn consume_req_width_and_prec(stack: &mut Vec<Pair<Rule>>, _kind: &str) -> Resul
     Ok((w, p))
 }
 
-// pub fn parse_demo() {
-//     let raw = std::fs::read_to_string("numbers.csv").expect("Could not read file");
-//     let data = CSVParser::parse(Rule::file, &raw)
-//         .expect("Unsuccessful parse")
-//         .next()
-//         .unwrap();
-
-//     let mut field_sum: f64 = 0.0;
-//     let mut record_count: u64 = 0;
-
-//     for record in data.into_inner() {
-//         match record.as_rule() {
-//             Rule::record => {
-//                 record_count += 1;
-                
-//                 for field in record.into_inner() {
-//                     field_sum += field.as_str().parse::<f64>().unwrap();
-//                 }
-//             },
-//             Rule::EOI => (),
-//             _ => unreachable!(),
-//         }
-//     }
-
-//     println!("Sum of fields: {field_sum}");
-//     println!("Number of records: {record_count}");
-// }
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // #[test]
-    // fn test_demo() {
-    //     parse_demo();
-    //     assert!(true);
-    // }
+    #[test]
+    fn test_char() -> Result<()> {
+        let v = FortFormat::parse("(a)")?.into_fields();
+        assert_eq!(v.len(), 1, "Parsing '(a)' did not return exactly 1 field");
+        assert_eq!(v.last().unwrap(), &FortField::Char { width: None }, "Parsing '(a)' failed");
+
+        let v = FortFormat::parse("(a16)")?.into_fields();
+        assert_eq!(v.len(), 1, "Parsing '(a16)' did not return exactly 1 field");
+        assert_eq!(v.last().unwrap(), &FortField::Char { width: Some(16) }, "Parsing '(a16)' failed");
+
+        let e = FortFormat::parse("(a-16)");
+        assert!(e.is_err(), "Parsing '(a-16)' (negative width) did not return an error");
+        Ok(())
+    }
+
+    #[test]
+    fn test_logical() -> Result<()> {
+        let v = FortFormat::parse("(l1)")?.into_fields();
+        assert_eq!(v.len(), 1, "Parsing '(l1)' did not return exactly 1 field");
+        assert_eq!(v.last().unwrap(), &FortField::Logical { width: 1 }, "Parsing '(l1)' failed");
+
+        let e = FortFormat::parse("(l)");
+        assert!(e.is_err(), "Parsing '(l)' (no width) did not return an error");
+
+        let e = FortFormat::parse("(l-1)");
+        assert!(e.is_err(), "Parsing '(l-1)' (negative width) did not return an error");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal() -> Result<()> {
+        test_integer(IntBase::Decimal)
+    }
+
+    #[test]
+    fn test_octal() -> Result<()> {
+        test_integer(IntBase::Octal)
+    }
+
+    #[test]
+    fn test_hex() -> Result<()> {
+        test_integer(IntBase::Hexadecimal)
+    }
+
+    fn test_integer(base: IntBase) -> Result<()> {
+
+
+        let v = FortFormat::parse(&format!("({base}8)"))?.into_fields();
+        assert_eq!(v.len(), 1, "Parsing '({base}8)' did not return exactly 1 field");
+        assert_eq!(v.last().unwrap(), &FortField::Integer { width: 8, zeros: None, base }, "Parsing '({base}8)' failed");
+
+        let v = FortFormat::parse(&format!("({base}8.6)"))?.into_fields();
+        assert_eq!(v.len(), 1, "Parsing '(i{base}.6)' did not return exactly 1 field");
+        assert_eq!(v.last().unwrap(), &FortField::Integer { width: 8, zeros: Some(6), base }, "Parsing '({base}8.6)' failed");
+
+        let e = FortFormat::parse(&format!("({base})"));
+        assert!(e.is_err(), "Parsing '({base})' (no width) did not return an error");
+
+        let e = FortFormat::parse(&format!("({base}8.)"));
+        assert!(e.is_err(), "Parsing '({base}8.)' (missing precision width) did not return an error");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_float() -> Result<()> {
+        test_real(RealFmt::F)
+    }
+
+    #[test]
+    fn test_double() -> Result<()> {
+        test_real(RealFmt::D)
+    }
+
+    #[test]
+    fn test_exponential() -> Result<()> {
+        test_real(RealFmt::E)
+    }
+
+    #[test]
+    fn test_gfloat() -> Result<()> {
+        test_real(RealFmt::G)
+    }
+
+    fn test_real(fmt: RealFmt) -> Result<()> {
+        let v = FortFormat::parse(&format!("({fmt}8)"))?.into_fields();
+        assert_eq!(v.len(), 1, "Parsing '({fmt}8)' did not return exactly 1 field");
+        assert_eq!(v.last().unwrap(), &FortField::Real { width: 8, precision: None, fmt, scale: 0 }, "Parsing '({fmt}8)' failed");
+
+        let v = FortFormat::parse(&format!("({fmt}8.6)"))?.into_fields();
+        assert_eq!(v.len(), 1, "Parsing '({fmt}8.6)' did not return exactly 1 field");
+        assert_eq!(v.last().unwrap(), &FortField::Real { width: 8, precision: Some(6), fmt, scale: 0 }, "Parsing '({fmt}8.6)' failed");
+
+        let v = FortFormat::parse(&format!("(2p{fmt}8.6)"))?.into_fields();
+        assert_eq!(v.len(), 1, "Parsing '(2p{fmt}8.6)' did not return exactly 1 field");
+        assert_eq!(v.last().unwrap(), &FortField::Real { width: 8, precision: Some(6), fmt, scale: 2 }, "Parsing '(2p{fmt}8.6)' failed");
+
+        let e = FortFormat::parse(&format!("({fmt})"));
+        assert!(e.is_err(), "Parsing '({fmt})' (no width) did not return an error");
+
+        let e = FortFormat::parse(&format!("({fmt}8.)"));
+        assert!(e.is_err(), "Parsing '({fmt}8.)' (missing precision width) did not return an error");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_scales() -> Result<()> {
+        let s = "(f7.2 2p f8.3 -3p f5.1 f6 0p f10.3)";
+        let v = FortFormat::parse(s)?.into_fields();
+        let expected = vec![
+            FortField::Real { width: 7, precision: Some(2), fmt: RealFmt::F, scale: 0 },
+            FortField::Real { width: 8, precision: Some(3), fmt: RealFmt::F, scale: 2 },
+            FortField::Real { width: 5, precision: Some(1), fmt: RealFmt::F, scale: -3 },
+            FortField::Real { width: 6, precision: None, fmt: RealFmt::F, scale: -3 },
+            FortField::Real { width: 10, precision: Some(3), fmt: RealFmt::F, scale: 0 },
+        ];
+        assert_eq!(v, expected, "Parsing {s} failed");
+        Ok(())
+    }
+
+    #[test]
+    fn test_simple_repeats() -> Result<()> {
+        let s = "(3i8 2f7.2)";
+        let v = FortFormat::parse(s)?.into_fields();
+        let expected = vec![
+            FortField::Integer { width: 8, zeros: None, base: IntBase::Decimal },
+            FortField::Integer { width: 8, zeros: None, base: IntBase::Decimal },
+            FortField::Integer { width: 8, zeros: None, base: IntBase::Decimal },
+            FortField::Real { width: 7, precision: Some(2), fmt: RealFmt::F, scale: 0 },
+            FortField::Real { width: 7, precision: Some(2), fmt: RealFmt::F, scale: 0 },
+        ];
+        assert_eq!(v, expected, "Parsing {s} failed");
+        Ok(())
+    }
+
+    #[test]
+    fn test_sequence() -> Result<()> {
+        let s = "(a32 2x l4 i8 f10.3 e11.4 d12.5 g7.2)";
+        let v = FortFormat::parse(s)?.into_fields();
+        let expected = vec![
+            FortField::Char { width: Some(32) },
+            FortField::Skip,
+            FortField::Skip,
+            FortField::Logical { width: 4 },
+            FortField::Integer { width: 8, zeros: None, base: IntBase::Decimal },
+            FortField::Real { width: 10, precision: Some(3), fmt: RealFmt::F, scale: 0 },
+            FortField::Real { width: 11, precision: Some(4), fmt: RealFmt::E, scale: 0 },
+            FortField::Real { width: 12, precision: Some(5), fmt: RealFmt::D, scale: 0 },
+            FortField::Real { width: 7, precision: Some(2), fmt: RealFmt::G, scale: 0 },
+        ];
+
+        assert_eq!(v, expected, "Parsing {s} failed");
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_one_level() -> Result<()> {
+        let s = "(a32 2(1x f7.4))";
+        let v = FortFormat::parse(s)?.into_fields();
+        let expected = vec![
+            FortField::Char { width: Some(32) },
+            FortField::Skip,
+            FortField::Real { width: 7, precision: Some(4), fmt: RealFmt::F, scale: 0 },
+            FortField::Skip,
+            FortField::Real { width: 7, precision: Some(4), fmt: RealFmt::F, scale: 0 },
+        ];
+
+        assert_eq!(v, expected, "Parsing {s} failed");
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_two_level() -> Result<()> {
+        let s = "(3(a8 1x 2(i4 1x f7.4 1x)))";
+        let v = FortFormat::parse(s)?.into_fields();
+        let expected = vec![
+            FortField::Char { width: Some(8) },
+            FortField::Skip,
+
+            FortField::Integer { width: 4, zeros: None, base: IntBase::Decimal },
+            FortField::Skip,
+            FortField::Real { width: 7, precision: Some(4), fmt: RealFmt::F, scale: 0 },
+            FortField::Skip,
+
+            FortField::Integer { width: 4, zeros: None, base: IntBase::Decimal },
+            FortField::Skip,
+            FortField::Real { width: 7, precision: Some(4), fmt: RealFmt::F, scale: 0 },
+            FortField::Skip,
+        ];
+
+        let expected = expected.repeat(3);
+
+        assert_eq!(v, expected, "Parsing {s} failed");
+        Ok(())
+    }
 }

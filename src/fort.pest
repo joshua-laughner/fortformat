@@ -1,3 +1,4 @@
+// Based syntax on the Oracle F77 docs: https://docs.oracle.com/cd/E19957-01/805-4939/z40007437a2e/index.html
 WHITESPACE = _{ " " | "\t" }
 repeat = { ASCII_DIGIT+ }
 width = { ASCII_DIGIT+ }
@@ -9,7 +10,7 @@ char = ${ ^"a" ~ width? }
 
 logical = ${ ^"l" ~ width }
 
-integer = ${ ^"i" ~ (width ~ ("." ~ prec)?)? }
+integer = ${ ^"i" ~ width ~ ("." ~ prec)? }
 octal = ${ ^"o" ~ width ~ ("." ~ prec)? }
 hex = ${ ^"z" ~ width ~ ("." ~ prec)? }
 
