@@ -1,0 +1,17 @@
+WHITESPACE = _{ " " | "\t" }
+
+// Fortran values are allowed to have leading whitespace. To make parsing the value
+// easier, we define two rules for each type. The "value" one defines the characters
+// allowed to be part of the value. The "expr" one prepends whitespace to that. In the
+// code, we search for one of the "expr" rules first, then extract the value itself.
+
+// The ^'s make this case insensitive
+logical_value = { ^".true." | ^".false." | ^"t" | ^"f" }
+logical_expr = { WHITESPACE* ~ logical_value }
+
+sign = { "+" | "-" }
+integer_decimal_value = { sign? ~ ASCII_DIGIT+ }
+integer_decimal_expr = { WHITESPACE* ~ integer_decimal_value }
+
+unsigned_int_decimal_value = { ASCII_DIGIT+ }
+unsigned_int_decimal_expr = { WHITESPACE* ~ unsigned_int_decimal_value }

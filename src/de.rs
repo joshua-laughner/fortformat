@@ -1,0 +1,323 @@
+use serde::de;
+use crate::serde_error::{SResult, SError};
+use crate::format_specs::{FortFormat, FortField};
+use crate::parsing;
+
+
+pub fn from_str<'a, T>(s: &'a str, fmt: &'a FortFormat) -> SResult<T> 
+where T: de::Deserialize<'a>
+{
+    let mut deserializer = Deserializer::from_str(s, fmt);
+    let t = T::deserialize(&mut deserializer)?;
+    Ok(t)
+}
+
+pub struct Deserializer<'de> {
+    input: &'de str,
+    fmt: std::slice::Iter<'de, FortField>,
+}
+
+
+impl<'de> Deserializer<'de> {
+    pub fn from_str(input: &'de str, fmt: &'de FortFormat) -> Self {
+        Self { input, fmt: fmt.fields.iter() }
+    }
+
+    fn next_fmt(&mut self) -> SResult<&FortField> {
+        self.fmt.next().ok_or_else(|| SError::FormatSpecTooShort)
+    }
+
+    fn next_n_chars(&mut self, n: u32) -> &'de str {
+        let n: usize = n.try_into().expect("Could not fit u32 into usize");
+        let mut nbytes = 0;
+        for (i, c) in self.input.chars().enumerate() {
+            nbytes += c.len_utf8();
+            if i+1 == n { break; }
+        }
+
+        let s = &self.input[..nbytes];
+        self.input = &self.input[nbytes..];
+        s
+    }
+}
+
+impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
+    type Error = SError;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        let next_fmt = *self.next_fmt()?;
+        if let FortField::Logical { width } = next_fmt {
+            let substr = self.next_n_chars(width);
+            let b = parsing::parse_logical(substr)?;
+            visitor.visit_bool(b)
+        } else {
+            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "bool" })
+        }
+    }
+
+    fn deserialize_i8<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        self.deserialize_i64(visitor)
+        .map_err(|e| e.with_serde_type("i8"))
+    }
+
+    fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+            self.deserialize_i64(visitor)
+            .map_err(|e| e.with_serde_type("i16"))
+    }
+
+    fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        self.deserialize_i64(visitor)
+        .map_err(|e| e.with_serde_type("i32"))
+    }
+
+    fn deserialize_i64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        let next_fmt = *self.next_fmt()?;
+        if let FortField::Integer { width, zeros: _, base } = next_fmt {
+            let substr = self.next_n_chars(width);
+            let v = match base {
+                crate::format_specs::IntBase::Decimal => parsing::parse_integer(substr)?,
+                crate::format_specs::IntBase::Octal => todo!(),
+                crate::format_specs::IntBase::Hexadecimal => todo!(),
+            };
+            visitor.visit_i64(v)
+        } else {
+            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "i64" })
+        }
+    }
+
+    fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+            self.deserialize_u64(visitor)
+            .map_err(|e| e.with_serde_type("u8"))
+    }
+
+    fn deserialize_u16<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        self.deserialize_u64(visitor)
+        .map_err(|e| e.with_serde_type("u16"))
+    }
+
+    fn deserialize_u32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        self.deserialize_u64(visitor)
+        .map_err(|e| e.with_serde_type("u32"))
+    }
+
+    fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+            let next_fmt = *self.next_fmt()?;
+            if let FortField::Integer { width, zeros: _, base } = next_fmt {
+                let substr = self.next_n_chars(width);
+                let v = match base {
+                    crate::format_specs::IntBase::Decimal => parsing::parse_unsigned_integer(substr)?,
+                    crate::format_specs::IntBase::Octal => todo!(),
+                    crate::format_specs::IntBase::Hexadecimal => todo!(),
+                };
+                visitor.visit_u64(v)
+            } else {
+                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "u64" })
+            }
+    }
+
+    fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_char<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_unit_struct<V>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_newtype_struct<V>(
+        self,
+        name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_tuple<V>(self, len: usize, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_tuple_struct<V>(
+        self,
+        name: &'static str,
+        len: usize,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_struct<V>(
+        self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_enum<V>(
+        self,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+
+    fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de> {
+        todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_de_bool() -> SResult<()> {
+        let ff = FortFormat::parse("(l1)")?;
+        let b: bool = from_str("T", &ff)?;
+        assert_eq!(b, true);
+        Ok(())
+    }
+
+    #[test]
+    fn test_de_integer() -> SResult<()> {
+        let ff = FortFormat::parse("(i2)")?;
+        let i: i8 = from_str("8", &ff)?;
+        assert_eq!(i, 8);
+
+        let i: i8 = from_str("-1", &ff)?;
+        assert_eq!(i, -1);
+
+        // this confirms that we only parse two characters - including the sign
+        let i: i8 = from_str("-22", &ff)?;
+        assert_eq!(i, -2);
+
+        let i: i64 = from_str("42", &ff)?;
+        assert_eq!(i, 42);
+
+        let i: i64 = from_str("-7", &ff)?;
+        assert_eq!(i, -7);
+
+        let u: u8 = from_str("3", &ff)?;
+        assert_eq!(u, 3);
+
+        let u: u64 = from_str("26", &ff)?;
+        assert_eq!(u, 26);
+
+        // this confirms that we only parse two characters
+        let u: u8 = from_str("200", &ff)?;
+        assert_eq!(u, 20);
+
+        Ok(())
+    }
+}
