@@ -1,4 +1,4 @@
-use serde::de;
+use serde::de::{self, SeqAccess};
 use crate::serde_error::{SResult, SError};
 use crate::format_specs::{FortFormat, FortField};
 use crate::parsing;
@@ -24,20 +24,36 @@ impl<'de> Deserializer<'de> {
     }
 
     fn next_fmt(&mut self) -> SResult<&FortField> {
-        self.fmt.next().ok_or_else(|| SError::FormatSpecTooShort)
+        loop {
+            let next_fmt = self.fmt.next();
+            match next_fmt {
+                Some(&FortField::Skip) => {
+                    self.next_n_chars(1)?;
+                    continue
+                },
+                Some(field) => return Ok(field),
+                None => return Err(SError::FormatSpecTooShort)
+            }
+        }
     }
 
-    fn next_n_chars(&mut self, n: u32) -> &'de str {
+    fn next_n_chars(&mut self, n: u32) -> Result<&'de str, SError> {
         let n: usize = n.try_into().expect("Could not fit u32 into usize");
         let mut nbytes = 0;
-        for (i, c) in self.input.chars().enumerate() {
+        let mut i = 0;
+        for c in self.input.chars() {
+            i += 1;
             nbytes += c.len_utf8();
-            if i+1 == n { break; }
+            if i == n { break; }
+        }
+
+        if i < n {
+            return Err(SError::InputEndedEarly)
         }
 
         let s = &self.input[..nbytes];
         self.input = &self.input[nbytes..];
-        s
+        Ok(s)
     }
 }
 
@@ -55,7 +71,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: de::Visitor<'de> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Logical { width } = next_fmt {
-            let substr = self.next_n_chars(width);
+            let substr = self.next_n_chars(width)?;
             let b = parsing::parse_logical(substr)?;
             visitor.visit_bool(b)
         } else {
@@ -89,7 +105,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: de::Visitor<'de> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Integer { width, zeros: _, base } = next_fmt {
-            let substr = self.next_n_chars(width);
+            let substr = self.next_n_chars(width)?;
             let v = match base {
                 crate::format_specs::IntBase::Decimal => parsing::parse_integer(substr)?,
                 crate::format_specs::IntBase::Octal => todo!(),
@@ -127,7 +143,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: de::Visitor<'de> {
             let next_fmt = *self.next_fmt()?;
             if let FortField::Integer { width, zeros: _, base } = next_fmt {
-                let substr = self.next_n_chars(width);
+                let substr = self.next_n_chars(width)?;
                 let v = match base {
                     crate::format_specs::IntBase::Decimal => parsing::parse_unsigned_integer(substr)?,
                     crate::format_specs::IntBase::Octal => todo!(),
@@ -154,7 +170,22 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     fn deserialize_char<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
-        todo!()
+        let next_fmt = *self.next_fmt()?;
+        match next_fmt {
+            FortField::Char { width: None } | FortField::Char { width: Some(1) } => {
+                let c = self.next_n_chars(1)?
+                    .chars()
+                    .next()
+                    .unwrap();  // Ok to unwrap, next_n_chars returns an error if not enough characters available.
+                visitor.visit_char(c)
+            },
+            FortField::Char { width: _ } => {
+                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char (requires 'a' or 'a1' Fortran format)" })
+            },
+            _ => {
+                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char" })
+            }
+        }
     }
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -222,7 +253,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     fn deserialize_tuple<V>(self, len: usize, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
-        todo!()
+        visitor.visit_seq(KnownLenSeq::new(self, len))
     }
 
     fn deserialize_tuple_struct<V>(
@@ -244,13 +275,16 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 
     fn deserialize_struct<V>(
         self,
-        name: &'static str,
+        _name: &'static str,
         fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
-        todo!()
+        
+        // We'll assume that structures should read their fields in order from the input
+        // and so deserialize them as known length sequences.
+        visitor.visit_seq(KnownLenSeq::new(self, fields.len()))
     }
 
     fn deserialize_enum<V>(
@@ -277,8 +311,42 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 }
 
+
+struct KnownLenSeq<'a, 'de: 'a> {
+    de: &'a mut Deserializer<'de>,
+    n: usize,
+    i: usize,
+}
+
+impl<'a, 'de> KnownLenSeq<'a, 'de> {
+    fn new(de: &'a mut Deserializer<'de>, n: usize) -> Self {
+        Self { de, n, i: 0 }
+    }
+}
+
+impl<'de, 'a> SeqAccess<'de> for KnownLenSeq<'a, 'de> {
+    type Error = SError;
+
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
+    where
+        T: de::DeserializeSeed<'de> {
+        
+        if self.i == self.n {
+            // Check if we've already deserialized all the elements we are supposed to
+            // and stop if so.
+            Ok(None)
+        } else {
+            // Otherwise we can just deserialize whatever the next element is
+            self.i += 1;
+            seed.deserialize(&mut *self.de).map(Some)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use serde::Deserialize;
+
     use super::*;
 
     #[test]
@@ -292,7 +360,7 @@ mod tests {
     #[test]
     fn test_de_integer() -> SResult<()> {
         let ff = FortFormat::parse("(i2)")?;
-        let i: i8 = from_str("8", &ff)?;
+        let i: i8 = from_str(" 8", &ff)?;
         assert_eq!(i, 8);
 
         let i: i8 = from_str("-1", &ff)?;
@@ -308,7 +376,7 @@ mod tests {
         let i: i64 = from_str("-7", &ff)?;
         assert_eq!(i, -7);
 
-        let u: u8 = from_str("3", &ff)?;
+        let u: u8 = from_str(" 3", &ff)?;
         assert_eq!(u, 3);
 
         let u: u64 = from_str("26", &ff)?;
@@ -317,6 +385,31 @@ mod tests {
         // this confirms that we only parse two characters
         let u: u8 = from_str("200", &ff)?;
         assert_eq!(u, 20);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_de_tuple() -> SResult<()> {
+        let ff = FortFormat::parse("(a1,1x,i2,1x,i4)")?;
+        let t: (char, i32, i32) = from_str("a 16 9876", &ff)?;
+        assert_eq!(t, ('a', 16, 9876));
+        Ok(())
+    }
+
+    #[test]
+    fn test_de_struct() -> SResult<()> {
+        #[derive(Debug, PartialEq, Eq, Deserialize)]
+        struct Test {
+            x: i32,
+            y: i32,
+            c: char,
+            b: bool
+        }
+
+        let ff = FortFormat::parse("(2i3,1x,a,1x,l1)")?;
+        let s: Test = from_str(" 10 20 z F", &ff)?;
+        assert_eq!(s, Test { x: 10, y: 20, c: 'z', b: false });
 
         Ok(())
     }
