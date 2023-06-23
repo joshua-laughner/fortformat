@@ -413,4 +413,19 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_de_struct_with_array() -> SResult<()> {
+        #[derive(Debug, PartialEq, Eq, Deserialize)]
+        struct Test {
+            flag: bool,
+            data: [i32; 8]
+        }
+
+        let ff = FortFormat::parse("(l1,1x,8i3)")?;
+        let s: Test = from_str("T  10 20 30 40 50 60 70 80", &ff)?;
+        assert_eq!(s, Test{ flag: true, data: [10, 20, 30, 40, 50, 60, 70, 80] });
+
+        Ok(())
+    }
 }
