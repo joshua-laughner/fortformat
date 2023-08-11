@@ -14,34 +14,87 @@ where T: de::Deserialize<'a>
 
 pub struct Deserializer<'de> {
     input: &'de str,
-    fmt: std::slice::Iter<'de, FortField>,
+    input_idx: usize,
+    fmt: &'de FortFormat,
+    fmt_idx: usize,
 }
 
 
 impl<'de> Deserializer<'de> {
     pub fn from_str(input: &'de str, fmt: &'de FortFormat) -> Self {
-        Self { input, fmt: fmt.fields.iter() }
+        Self { input, input_idx: 0, fmt, fmt_idx: 0 }
+    }
+
+    fn advance_over_skips(&mut self) {
+        loop {
+            // Consume any skips (i.e. 1x, 2x) in the format, also advancing
+            // the internal string. This can be modified to handle other types
+            // of Fortran positioning formats in the future.
+            let peeked_fmt = self.fmt.fields.get(self.fmt_idx);
+            match peeked_fmt {
+                Some(&FortField::Skip) => {
+                    self.fmt_idx += 1;
+                    let _ = self.next_n_chars(1);
+                }
+                _ => return,
+            }
+        }
     }
 
     fn next_fmt(&mut self) -> SResult<&FortField> {
+        self.advance_over_skips();
         loop {
-            let next_fmt = self.fmt.next();
+            let next_fmt = self.fmt.fields.get(self.fmt_idx);
+            println!("next_fmt = {next_fmt:?} @ {}", self.fmt_idx);
             match next_fmt {
-                Some(&FortField::Skip) => {
-                    self.next_n_chars(1)?;
-                    continue
+                Some(field) => {
+                    self.fmt_idx += 1;
+                    return Ok(field)
                 },
-                Some(field) => return Ok(field),
                 None => return Err(SError::FormatSpecTooShort)
             }
         }
     }
 
+    fn peek_fmt(&mut self) -> Option<&FortField> {
+        self.advance_over_skips();
+        self.fmt.fields.get(self.fmt_idx)
+    }
+
+    fn rewind_fmt(&mut self) {
+        if self.fmt_idx == 0 {
+            return;
+        }
+
+        // None of the deserializers consume characters until the format has been matched,
+        // so we only need to reset the format index, not the character index.
+        self.fmt_idx -= 1;
+        return;
+        
+        let prev_fmt = if let Some(f) = self.fmt.fields.get(self.fmt_idx) {
+            f
+        } else {
+            return;
+        };
+
+        println!("prev_fmt = {prev_fmt:?}");
+
+        match prev_fmt {
+            FortField::Char { width } => self.prev_n_chars(width.unwrap_or(1)),
+            FortField::Logical { width } => self.prev_n_chars(*width),
+            FortField::Integer { width, zeros: _, base: _ } => self.prev_n_chars(*width),
+            FortField::Real { width, precision: _, fmt: _, scale: _ } => self.prev_n_chars(*width),
+            FortField::Skip => self.prev_n_chars(1),
+        }
+
+    }
+
     fn next_n_chars(&mut self, n: u32) -> Result<&'de str, SError> {
+        println!("Getting {n} characters");
         let n: usize = n.try_into().expect("Could not fit u32 into usize");
         let mut nbytes = 0;
         let mut i = 0;
-        for c in self.input.chars() {
+        for c in self.input[self.input_idx..].chars() {
             i += 1;
             nbytes += c.len_utf8();
             if i == n { break; }
@@ -51,9 +104,22 @@ impl<'de> Deserializer<'de> {
             return Err(SError::InputEndedEarly)
         }
 
-        let s = &self.input[..nbytes];
-        self.input = &self.input[nbytes..];
+        let s = &self.input[self.input_idx..self.input_idx+nbytes];
+        self.input_idx += nbytes;
         Ok(s)
+    }
+
+    fn prev_n_chars(&mut self, n: u32) {
+        let n: usize = n.try_into().expect("Could not fit u32 into usize");
+        let mut nbytes = 0;
+        let mut i = 0;
+        for c in self.input[..self.input_idx].chars().rev() {
+            i += 1;
+            nbytes += c.len_utf8();
+            if i == n { break; }
+        }
+
+        self.input_idx -= nbytes;
     }
 }
 
@@ -113,7 +179,8 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             };
             visitor.visit_i64(v)
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "i64" })
+                println!("Format type mismatch in de i64, got {:?} @ {}", next_fmt, self.fmt_idx);
+                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "i64" })
         }
     }
 
@@ -191,13 +258,20 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
-        todo!()
+        let next_fmt = *self.next_fmt()?;
+        if let FortField::Char { width } = next_fmt {
+            let s = self.next_n_chars(width.unwrap_or(1))?;
+            visitor.visit_borrowed_str(s)
+        } else {
+            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "&str" })
+        }
+        
     }
 
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
-        todo!()
+        self.deserialize_str(visitor)
     }
 
     fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -247,7 +321,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
-        todo!()
+        visitor.visit_seq(UnknownLenSeq::new(self, None))
     }
 
     fn deserialize_tuple<V>(self, len: usize, visitor: V) -> Result<V::Value, Self::Error>
@@ -343,6 +417,49 @@ impl<'de, 'a> SeqAccess<'de> for KnownLenSeq<'a, 'de> {
     }
 }
 
+
+struct UnknownLenSeq<'a, 'de: 'a> {
+    de: &'a mut Deserializer<'de>,
+    n: usize,
+    max_n: Option<usize>
+}
+
+impl<'a, 'de> UnknownLenSeq<'a, 'de> {
+    fn new(de: &'a mut Deserializer<'de>, max_n: Option<usize>) -> Self {
+        Self { de, n: 0, max_n }
+    }
+}
+
+impl<'de, 'a> SeqAccess<'de> for UnknownLenSeq<'a, 'de> {
+    type Error = SError;
+
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
+    where
+        T: de::DeserializeSeed<'de> {
+        
+        // First check if we've already deserialized the maximum number of allowed values
+        // and stop if so
+        if let Some(m) = self.max_n {
+            if m == self.n {
+                return Ok(None)
+            }
+        }
+
+        // Otherwise we try to deserialize the next value in the sequence. Some errors tell us
+        // to end the sequence, others are actual errors.
+        match seed.deserialize(&mut *self.de) {
+            Ok(el) => Ok(Some(el)),
+            Err(SError::FormatTypeMismatch { spec_type: _, serde_type: _ }) => {
+                self.de.rewind_fmt();
+                Ok(None)
+            }, // different type than desired, stop deserialization.
+            Err(SError::FormatSpecTooShort) => Ok(None), // nothing more in the format spec list, stop deserialization
+            Err(SError::InputEndedEarly) => Ok(None), // no more input, stop deserialization
+            Err(e) => Err(e) // other errors are actually problems
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde::Deserialize;
@@ -390,10 +507,34 @@ mod tests {
     }
 
     #[test]
+    fn test_de_string() -> SResult<()> {
+        let ff = FortFormat::parse("(a16)")?;
+        let s: String = from_str("Hello world!    ", &ff)?;
+        assert_eq!(s, "Hello world!    ");
+        Ok(())
+    }
+
+    #[test]
     fn test_de_tuple() -> SResult<()> {
         let ff = FortFormat::parse("(a1,1x,i2,1x,i4)")?;
         let t: (char, i32, i32) = from_str("a 16 9876", &ff)?;
         assert_eq!(t, ('a', 16, 9876));
+        Ok(())
+    }
+
+    #[test]
+    fn test_de_vec() -> SResult<()> {
+        let ff = FortFormat::parse("5(i3,1x)")?;
+        let v: Vec<i32> = from_str("123 456 789 246 369", &ff)?;
+        assert_eq!(&v, &[123, 456, 789, 246, 369]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_de_vec_in_tuple() -> SResult<()> {
+        let ff = FortFormat::parse("(a5,1x,3i3,a5)")?;
+        let t: (String, Vec<i32>, String) = from_str("Hello 12 34 56 World", &ff)?;
+        assert_eq!(t, ("Hello".to_owned(), vec![12, 34, 56], "World".to_owned()));
         Ok(())
     }
 
