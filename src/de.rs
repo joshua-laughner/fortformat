@@ -56,6 +56,7 @@ impl<'de> Deserializer<'de> {
         }
     }
 
+    #[allow(dead_code)] // keeping this function for now in case it is needed later
     fn peek_fmt(&mut self) -> Option<&FortField> {
         self.advance_over_skips();
         self.fmt.fields.get(self.fmt_idx)
@@ -69,23 +70,6 @@ impl<'de> Deserializer<'de> {
         // None of the deserializers consume characters until the format has been matched,
         // so we only need to reset the format index, not the character index.
         self.fmt_idx -= 1;
-        return;
-        
-        let prev_fmt = if let Some(f) = self.fmt.fields.get(self.fmt_idx) {
-            f
-        } else {
-            return;
-        };
-
-        println!("prev_fmt = {prev_fmt:?}");
-
-        match prev_fmt {
-            FortField::Char { width } => self.prev_n_chars(width.unwrap_or(1)),
-            FortField::Logical { width } => self.prev_n_chars(*width),
-            FortField::Integer { width, zeros: _, base: _ } => self.prev_n_chars(*width),
-            FortField::Real { width, precision: _, fmt: _, scale: _ } => self.prev_n_chars(*width),
-            FortField::Skip => self.prev_n_chars(1),
-        }
 
     }
 
@@ -109,6 +93,7 @@ impl<'de> Deserializer<'de> {
         Ok(s)
     }
 
+    #[allow(dead_code)] // keeping this function for now in case it is needed later
     fn prev_n_chars(&mut self, n: u32) {
         let n: usize = n.try_into().expect("Could not fit u32 into usize");
         let mut nbytes = 0;
