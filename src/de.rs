@@ -1,4 +1,5 @@
 use serde::de::{self, SeqAccess};
+use crate::fort_error::FError;
 use crate::serde_error::{SResult, SError};
 use crate::format_specs::{FortFormat, FortField};
 use crate::parsing;
@@ -45,7 +46,6 @@ impl<'de> Deserializer<'de> {
         self.advance_over_skips();
         loop {
             let next_fmt = self.fmt.fields.get(self.fmt_idx);
-            println!("next_fmt = {next_fmt:?} @ {}", self.fmt_idx);
             match next_fmt {
                 Some(field) => {
                     self.fmt_idx += 1;
@@ -74,7 +74,6 @@ impl<'de> Deserializer<'de> {
     }
 
     fn next_n_chars(&mut self, n: u32) -> Result<&'de str, SError> {
-        println!("Getting {n} characters");
         let n: usize = n.try_into().expect("Could not fit u32 into usize");
         let mut nbytes = 0;
         let mut i = 0;
@@ -164,7 +163,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             };
             visitor.visit_i64(v)
         } else {
-                println!("Format type mismatch in de i64, got {:?} @ {}", next_fmt, self.fmt_idx);
                 Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "i64" })
         }
     }
@@ -210,13 +208,22 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
-        todo!()
+        self.deserialize_f64(visitor)
+        .map_err(|e| e.with_serde_type("f32"))
     }
 
     fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
-        todo!()
+        let next_fmt = *self.next_fmt()?;
+        if let FortField::Real { width, precision: _, fmt, scale: _ } = next_fmt {
+            let substr = self.next_n_chars(width)?;
+            let v = fast_float::parse(substr)
+                .map_err(|e| FError::ParsingError { s: substr.to_string(), t: "real", reason: format!("Invalid real number format ({e})") })?;
+            visitor.visit_f64(v)
+        } else {
+            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "f64" })
+        }
     }
 
     fn deserialize_char<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -487,6 +494,46 @@ mod tests {
         // this confirms that we only parse two characters
         let u: u8 = from_str("200", &ff)?;
         assert_eq!(u, 20);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_de_float() -> SResult<()> {
+        let ff = FortFormat::parse("(f8)")?;
+        let r: f64 = from_str("12.45678", &ff)?;
+        assert_eq!(r, 12.45678);
+
+        let r: f64 = from_str("-23.5678", &ff)?;
+        assert_eq!(r, -23.5678);
+
+        // TODO: Need to test fortran E and D numbers, plus scaled numbers
+        // Double check how fortran outputs these
+        let ff = FortFormat::parse("(e8)")?;
+        let r: f64 = from_str("1.34E+03", &ff)?;
+        assert_eq!(r, 1.34e3);
+
+        let r: f64 = from_str("1.34e+03", &ff)?;
+        assert_eq!(r, 1.34e3);
+
+        let r: f64 = from_str("1.34E-03", &ff)?;
+        assert_eq!(r, 1.34e-3);
+
+        let r: f64 = from_str("1.34e-03", &ff)?;
+        assert_eq!(r, 1.34e-3);
+
+        let ff = FortFormat::parse("(d8)")?;
+        let r: f64 = from_str("1.34D+03", &ff)?;
+        assert_eq!(r, 1.34e3);
+
+        let r: f64 = from_str("1.34d+03", &ff)?;
+        assert_eq!(r, 1.34e3);
+
+        let r: f64 = from_str("1.34D-03", &ff)?;
+        assert_eq!(r, 1.34e-3);
+
+        let r: f64 = from_str("1.34d-03", &ff)?;
+        assert_eq!(r, 1.34e-3);
 
         Ok(())
     }
