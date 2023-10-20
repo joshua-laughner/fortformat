@@ -9,6 +9,7 @@ pub type SResult<T> = Result<T, SError>;
 pub enum SError {
     FormatSpecTooShort,
     FormatTypeMismatch{spec_type: FortField, serde_type: &'static str},
+    FieldListTooShort,
     InputEndedEarly,
     ParsingError(FError),
     FormatError(PError),
@@ -29,6 +30,7 @@ impl Display for SError {
         match self {
             SError::FormatSpecTooShort => write!(f, "Format specifier ended before all fields of the structure to deserialize into were filled."),
             SError::FormatTypeMismatch { spec_type, serde_type } => write!(f, "The next value in the format specifier was {spec_type}, but the structure to deserialize into expected a {serde_type}"),
+            SError::FieldListTooShort => write!(f, "Field list ended before all fields of the structure to deserialize into were filled"),
             SError::InputEndedEarly => write!(f, "The input ended before deserialization was complete"),
             SError::ParsingError(e) => write!(f, "Error parsing value: {e}"),
             SError::FormatError(e) => write!(f, "Error parsing format: {e}"),
