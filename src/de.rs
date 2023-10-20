@@ -251,6 +251,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Real { width, precision: _, fmt, scale: _ } = next_fmt {
             let substr = self.next_n_chars(width)?;
+            let substr = substr.trim(); // Fortran format allows padding with spaces, but fast float does not
             let v = fast_float::parse(substr)
                 .map_err(|e| FError::ParsingError { s: substr.to_string(), t: "real", reason: format!("Invalid real number format ({e})") })?;
             visitor.visit_f64(v)
@@ -778,6 +779,33 @@ mod tests {
         // On the other hand, using #[serde(flatten)] is clearer that the fields of an inner struct
         // should be deserialized as if they are directly in the outer struct.
         assert!(s.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_extra_fields_map() -> SResult<()> {
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct Test {
+            name: String,
+            flag: i8,
+            #[serde(flatten)]
+            gases: std::collections::HashMap<String, f32>
+        }
+
+        let ff = FortFormat::parse("(a5,1x,i1,1x,f6.2,1x,f6.1,1x,f6.2)")?;
+        let fields = ["name", "flag", "co2", "ch4", "n2o"];
+        let data = "spec1 0 432.10 1800.0  98.76";
+        let s: Test = from_str_with_fields(data, &ff, &fields)?;
+
+        let gases = std::collections::HashMap::from([
+            ("co2".to_string(), 432.10),
+            ("ch4".to_string(), 1800.0),
+            ("n2o".to_string(), 98.76) 
+        ]);
+
+        let expected = Test { name: "spec1".to_string(), flag: 0, gases };
+        assert_eq!(s, expected);
 
         Ok(())
     }
