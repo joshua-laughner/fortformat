@@ -1,4 +1,4 @@
-use pest::{Parser};
+use pest::Parser;
 use crate::fort_error::{FResult, FError};
 
 #[derive(Parser)]

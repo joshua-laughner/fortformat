@@ -44,6 +44,40 @@ impl Display for RealFmt {
     }
 }
 
+impl RealFmt {
+    pub fn is_d(&self) -> bool {
+        if let Self::D = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_e(&self) -> bool {
+        if let Self::E = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_f(&self) -> bool {
+        if let Self::F = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn is_g(&self) -> bool {
+        if let Self::G = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntBase {
     Decimal,
@@ -406,6 +440,14 @@ mod tests {
             FortField::Real { width: 10, precision: Some(3), fmt: RealFmt::F, scale: 0 },
         ];
         assert_eq!(v, expected, "Parsing {s} failed");
+        Ok(())
+    }
+
+    #[test]
+    fn test_elided_scale() -> PResult<()> {
+        let v = FortFormat::parse("(-2pf13.5)")?.into_fields();
+        let expected = [FortField::Real { width: 13, precision: Some(5), fmt: RealFmt::F, scale: -2 }];
+        assert_eq!(v, expected);
         Ok(())
     }
 

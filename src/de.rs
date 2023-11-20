@@ -1,7 +1,7 @@
 use serde::de::{self, SeqAccess, MapAccess};
 use crate::fort_error::FError;
 use crate::serde_error::{SResult, SError};
-use crate::format_specs::{FortFormat, FortField};
+use crate::format_specs::{FortFormat, FortField, RealFmt};
 use crate::parsing;
 
 
@@ -249,11 +249,25 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: de::Visitor<'de> {
         let next_fmt = *self.next_fmt()?;
-        if let FortField::Real { width, precision: _, fmt, scale: _ } = next_fmt {
+        if let FortField::Real { width, precision: _, fmt, scale } = next_fmt {
+            // First handle initial parsing
             let substr = self.next_n_chars(width)?;
-            let substr = substr.trim(); // Fortran format allows padding with spaces, but fast float does not
-            let v = fast_float::parse(substr)
-                .map_err(|e| FError::ParsingError { s: substr.to_string(), t: "real", reason: format!("Invalid real number format ({e})") })?;
+            let substr = substr.trim(); // Fortran format allows padding with spaces, but Rust does not
+            let res = if fmt.is_d() {
+                let valstr = substr.replace("d", "e").replace("D", "E");
+                valstr.parse::<f64>()
+            } else {
+                substr.parse::<f64>()
+            };
+            let v = res.map_err(|e| FError::ParsingError { s: substr.to_string(), t: "real", reason: format!("Invalid real number format ({e})") })?;
+
+            // Handle the edge case of an F format with a scale factor - on output with Np
+            // the value is multiplied by 10^N so on input we need to multiply by 10^-N.
+            let v = if fmt.is_f() && scale != 0 {
+                v * 10.0_f64.powi(-scale)
+            } else {
+                v
+            };
             visitor.visit_f64(v)
         } else {
             Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "f64" })
@@ -600,8 +614,11 @@ mod tests {
         let r: f64 = from_str("-23.5678", &ff)?;
         assert_eq!(r, -23.5678);
 
-        // TODO: Need to test fortran E and D numbers, plus scaled numbers
-        // Double check how fortran outputs these
+        // TODO: Need to test scaled numbers
+        // For E/D formats, reading with scales doesn't matter: `write(*, '(2pe13.5)') 0.9`
+        //  produces 90.0000E-02, which we can parse as is. The challenge is for F formats,
+        //  `write(*, '(2pf13.5)') 0.9` produces 90.00000 i.e. the 2p multiplies the output
+        //  by 10^2. G formats seem to ignore the P scaling on output, need to check input.
         let ff = FortFormat::parse("(e8)")?;
         let r: f64 = from_str("1.34E+03", &ff)?;
         assert_eq!(r, 1.34e3);
@@ -627,6 +644,22 @@ mod tests {
 
         let r: f64 = from_str("1.34d-03", &ff)?;
         assert_eq!(r, 1.34e-3);
+
+        let ff = FortFormat::parse("(2pe13.5)")?;
+        let r: f64 = from_str("  90.0000E-02", &ff)?;
+        assert_eq!(r, 0.9, "(2pe13.5)");
+
+        let ff = FortFormat::parse("(-2pe13.5)")?;
+        let r: f64 = from_str("  0.00900E+02", &ff)?;
+        assert_eq!(r, 0.9, "(-2pe13.5)");
+
+        let ff = FortFormat::parse("(2pf13.5)")?;
+        let r: f64 = from_str("     90.00000", &ff)?;
+        assert_eq!(r, 0.9, "(2pf13.5)");
+
+        let ff = FortFormat::parse("(-2pf13.5)")?;
+        let r: f64 = from_str("      0.00800", &ff)?;
+        assert_eq!(r, 0.8, "(-2pf13.5)");
 
         Ok(())
     }
