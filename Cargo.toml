@@ -8,4 +8,12 @@ edition = "2021"
 [dependencies]
 pest = "2.5.3"
 pest_derive = "2.5.3"
-serde = { version = "1.0.164", features = ["derive"] }
+polars = {version = "0.35", default-features = false, features = ["rows", "fmt"], optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[dev-dependencies]
+stringreader = "0.1.1" # needed for tests to mock an input file
+
+[features]
+serde = ["dep:serde"]
+dataframes = ["dep:polars", "serde"]

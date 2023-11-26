@@ -1,14 +1,29 @@
+//! Represent Fortran formats as Rust types.
+//! 
+//! The first step in working with a Fortran format string such as "(a4,1x,i5.2)"
+//! is to parse it into a [`FortFormat`] with its `parse` method:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! let ff = FortFormat::parse("(a4,1x,i5.2)").unwrap();
+//! ```
+//! 
+//! From there, this can be used for [deserialization](crate::de) or you can inspect
+//! the fields directly with the `into_fields`, `iter_fields`, and `iter_non_skip_fields`
+//! methods on [`FortFormat`].
 use std::fmt::Display;
 
 use pest::{Parser, iterators::Pair, RuleType};
 
 type PResult<T> = std::result::Result<T, PError>;
 
+/// Represents an error in parsing a format string
 #[derive(Debug)]
 pub struct PError;
 
 impl <R: RuleType> From<pest::error::Error<R>> for PError {
     fn from(value: pest::error::Error<R>) -> Self {
+        // TODO: provide some useful information
         Self
     }
 }
@@ -21,8 +36,15 @@ impl Display for PError {
 
 #[derive(Parser)]
 #[grammar = "fort.pest"]
-pub struct FortParser;
+pub(crate) struct FortParser;
 
+/// Representation of which format a float (i.e. real) number is written in.
+/// 
+/// Fortran can write floating point values in four formats: 
+/// - `F`: non-exponential with a fixed number of digits after the decimal,
+/// - `G`: non-exponential with as many digits after the decimal as possible for the specified width,
+/// - `E`: exponential (e.g. 1.0E+02) for single precision numbers, and
+/// - `D`: like `E` but for double precision numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RealFmt {
     D,
@@ -45,6 +67,7 @@ impl Display for RealFmt {
 }
 
 impl RealFmt {
+    /// `true` if the format is `RealFmt::D`, `false` otherwise
     pub fn is_d(&self) -> bool {
         if let Self::D = self {
             true
@@ -53,6 +76,7 @@ impl RealFmt {
         }
     }
 
+    /// `true` if the format is `RealFmt::E`, `false` otherwise
     pub fn is_e(&self) -> bool {
         if let Self::E = self {
             true
@@ -61,6 +85,7 @@ impl RealFmt {
         }
     }
 
+    /// `true` if the format is `RealFmt::F`, `false` otherwise
     pub fn is_f(&self) -> bool {
         if let Self::F = self {
             true
@@ -69,6 +94,7 @@ impl RealFmt {
         }
     }
 
+    /// `true` if the format is `RealFmt::G`, `false` otherwise
     pub fn is_g(&self) -> bool {
         if let Self::G = self {
             true
@@ -78,6 +104,7 @@ impl RealFmt {
     }
 }
 
+/// Which base (10, 8, or 16) an integer format uses
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntBase {
     Decimal,
@@ -97,13 +124,72 @@ impl Display for IntBase {
     }
 }
 
+
+/// A representation of a full entry in a format specification, i.e. one `a`, `i`, etc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FortField {
+    /// A Fortran character (i.e. string) specification.
+    /// 
+    /// If the format specifier included a width (i.e. "a4"), then the inner field `width`
+    /// will hold that width. If not, `width` will be `None`. Fields with no width specified
+    /// can be assumed to be 1 character wide.
     Char{width: Option<u32>},
+
+    /// A Fortran logical (i.e. boolean) specification.
+    /// 
+    /// All logical specifications include a width (i.e. 4 in "l4"), this will be stored
+    /// as the inner `width` field.
     Logical{width: u32},
-    Integer{width: u32, zeros: Option<u32>, base: IntBase},
+
+    /// A Fortran integer specification.
+    /// 
+    /// All integer specifications have a width (i.e. 4 in "i4" or "i4.1"). Integer specs can include
+    /// a minimum number of digits; if the number of digits is less than this, the value will
+    /// be front-padded by zeros. This minimum width is the `zeros` inner field. Finally,
+    /// `base` indicates which base (10, 8, or 16) the integer is written in.
+    Integer{width: u32, zeros: Option<u32>, base: IntBase}, // TODO: check if `p` scaling affects integers
+
+    /// A Fortran real (i.e. floating point) specification.
+    /// 
+    /// All real specifications have a width (i.e. 4 in "f4" or "f4.1") which will be stored in the
+    /// `width` inner field. If the specification included a precision (i.e. the 1 in "f4.1"), this will
+    /// be stored in the `precision` inner field; otherwise, that will be `None`. The format style (i.e. D, 
+    /// E, F, or G) will be stored in `fmt`. If any scaling from a "p" specification affects this entry, it
+    /// will be stored in the `scale` value; that will be 1 if no "p" specification is in effect.
     Real{width: u32, precision: Option<u32>, fmt: RealFmt, scale: i32},
+
+    /// A specification indicating to leave a blank space.
     Skip
+}
+
+impl FortField {
+    /// Returns `true` if the field represents a positioning specifier (T, TL, TR, or X), `false` otherwise.
+    pub fn is_positional(&self) -> bool {
+        match self {
+            FortField::Char { width: _ } => false,
+            FortField::Logical { width: _ } => false,
+            FortField::Integer { width: _, zeros: _, base: _ } => false,
+            FortField::Real { width: _, precision: _, fmt: _, scale: _ } => false,
+            FortField::Skip => true,
+        }
+    }
+
+    /// Return the [Polars DataType](polars::datatypes::DataType) that matches this field type.
+    /// 
+    /// Note that because integer format specs do not carry information about the number of bytes
+    /// used, any integer format spec will map to an `Int64` DataType. Also, for simplicity, all
+    /// float specs map to a `Float64` type, although this may change in the future. Positional
+    /// format specs will return a `None`.
+    #[cfg(feature = "dataframes")]
+    pub fn polars_dtype(&self) -> Option<polars::datatypes::DataType> {
+        match self {
+            FortField::Char { width: _ } => Some(polars::datatypes::DataType::Utf8),
+            FortField::Logical { width: _ } => Some(polars::datatypes::DataType::Boolean),
+            FortField::Integer { width: _, zeros: _, base: _ } => Some(polars::datatypes::DataType::Int64),
+            FortField::Real { width: _, precision: _, fmt: _, scale: _ } => Some(polars::datatypes::DataType::Float64),
+            FortField::Skip => None,
+        }
+    }
 }
 
 impl Display for FortField {
@@ -132,18 +218,88 @@ impl Display for FortField {
     }
 }
 
+/// A representation of any scalar Fortran value (logical, character, integer, or real)
+/// 
+/// Note that Fortran character arrays are mapped to `String`s for convenience. Since Fortran 
+/// predates the Unicode standard, this makes the assumption that any formatted character output
+/// would be in ASCII. If this is not true in some use cases, a new variant will need to be
+/// added.
+#[derive(Debug, PartialEq)]
 pub enum FortValue {
+    Logical(bool),
     Char(String),
     Integer(i64),
     Real(f64)
 }
 
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for FortValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de> {
+        deserializer.deserialize_any(crate::de::FortValueVisitor)
+    }
+}
+
+#[cfg(feature = "dataframes")]
+impl From<FortValue> for polars::datatypes::AnyValue<'_> {
+    fn from(value: FortValue) -> Self {
+        match value {
+            FortValue::Logical(b) => polars::datatypes::AnyValue::Boolean(b),
+            FortValue::Char(s) => polars::datatypes::AnyValue::Utf8Owned(s.into()),
+            FortValue::Integer(i) => polars::datatypes::AnyValue::Int64(i),
+            FortValue::Real(f) => polars::datatypes::AnyValue::Float64(f),
+        }
+    }
+}
+
+
+/// An iterator over fields in a format string.
+/// 
+/// This can iterate over all fields or only non-positional ones.
+/// Which set it yields will be documented by the functions that return it.
+pub struct FieldIter<'i>{
+    all: bool,
+    fields: std::slice::Iter<'i, FortField>,
+}
+
+impl<'i> Iterator for FieldIter<'i> {
+    type Item = &'i FortField;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let element = self.fields.next();
+            if !self.all && element.map(|e| e.is_positional()).unwrap_or(false) {
+                // Keep going, we don't want to return skips or other positional
+                // values.
+            } else {
+                return element;
+            }
+        }
+    }
+}
+
+
+/// A wrapper struct containing a full format string's specifiers
+/// 
+/// Generally the first step in handling a Fortran format string will be to
+/// pass it to this struct's `parse` method:
+/// 
+/// ```
+/// # use fortformat::format_specs::FortFormat;
+/// let ff = FortFormat::parse("(a4,1x,i5.2)").unwrap();
+/// ```
+/// 
+/// Note that the format string must include the opening and closing parentheses.
 #[derive(Debug, Clone)]
 pub struct FortFormat {
-    pub fields: Vec<FortField>
+    pub(crate) fields: Vec<FortField>
 }
 
 impl FortFormat {
+    /// Parse a Fortran format string and return a `FortFormat` instance.
+    /// 
+    /// Returns an error if the format string has invalid syntax.
     pub fn parse(fmt_str: &str) -> PResult<Self> {
         let mut fields = vec![];
         let tree = FortParser::parse(Rule::format, fmt_str)?.next().unwrap();
@@ -247,8 +403,26 @@ impl FortFormat {
         Ok(Self { fields })
     }
 
+    /// Consume the `FortFormat` instance and return the inner `Vec<FortField>`.
     pub fn into_fields(self) -> Vec<FortField> {
         self.fields
+    }
+
+    /// Iterate over all fields in this format (including positionals)
+    pub fn iter_fields(&self) -> FieldIter {
+        FieldIter{fields: self.fields.iter(), all: true}
+    }
+
+    /// Iterate over non-positional fields in this format
+    pub fn iter_non_pos_fields(&self) -> FieldIter {
+        FieldIter{fields: self.fields.iter(), all: false}
+    }
+
+    /// Return the number of non-positional fields in this format
+    pub fn non_pos_len(&self) -> usize {
+        // TODO: cache this somehow?
+        let n = self.iter_non_pos_fields().count();
+        n
     }
 }
 

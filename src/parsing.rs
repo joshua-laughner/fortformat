@@ -3,9 +3,9 @@ use crate::fort_error::{FResult, FError};
 
 #[derive(Parser)]
 #[grammar = "values.pest"]
-pub struct ValueParser;
+pub(crate) struct ValueParser;
 
-pub fn parse_logical(s: &str) -> FResult<bool> {
+pub(crate) fn parse_logical(s: &str) -> FResult<bool> {
     let val = get_expr(s, Rule::logical_expr, Rule::logical_value)?;
     match val.as_str() {
         ".true." | "t" => Ok(true),
@@ -14,12 +14,12 @@ pub fn parse_logical(s: &str) -> FResult<bool> {
     }
 }
 
-pub fn parse_integer(s: &str) -> FResult<i64> {
+pub(crate) fn parse_integer(s: &str) -> FResult<i64> {
     let val = get_expr(s, Rule::integer_decimal_expr, Rule::integer_decimal_value)?;
     Ok(val.parse().unwrap())
 }
 
-pub fn parse_unsigned_integer(s: &str) -> FResult<u64> {
+pub(crate) fn parse_unsigned_integer(s: &str) -> FResult<u64> {
     let val = get_expr(s, Rule::unsigned_int_decimal_expr, Rule::unsigned_int_decimal_value)?;
     Ok(val.parse().unwrap())
 }

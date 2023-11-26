@@ -1,27 +1,261 @@
-use serde::de::{self, SeqAccess, MapAccess};
+//! Deserialize data written according to a Fortran format string
+//! 
+//! # Basic usage
+//! 
+//! This module expects that you have a Fortran format string, such as
+//! `(a10,i3,f8.2)` and want to deserialize data that was written out
+//! according to that format. The functions provided by this module
+//! belong to two groups: `from_*` and `from_*_with_fields`. The distinction
+//! mainly matters when deserializing into structures. The `from_*` functions
+//! will output values in the order they are defined. That is, this example
+//! will work, because the fields in `Person` are defined in the same order
+//! as they appear in the data:
+//! 
+//! ```
+//! use fortformat::format_specs::FortFormat;
+//! use fortformat::de::from_str;
+//! 
+//! #[derive(Debug, PartialEq, serde::Deserialize)]
+//! struct Person {
+//!     name: String,
+//!     age: i32,
+//!     weight: f32,
+//! }
+//! 
+//! let ff = FortFormat::parse("(a10,i3,f8.1)").unwrap();
+//! let p: Person = from_str("John Doe   30   180.5", &ff).unwrap();
+//! assert_eq!(p, Person{name: "John Doe".to_string(), age: 30, weight: 180.5});
+//! ```
+//! 
+//! However, the next example will *not* work, because the field order does not match
+//! the data:
+//! 
+//! ```
+//! use fortformat::serde_error::SResult;
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::de::from_str;
+//! # 
+//! # #[derive(Debug, PartialEq, serde::Deserialize)]
+//! # struct Person {
+//! #     name: String,
+//! #     age: i32,
+//! #     weight: f32,
+//! # }
+//! let ff = FortFormat::parse("(f8.1,i3,1x,a10)").unwrap();
+//! let res: SResult<Person> = from_str("   180.5 30 John Doe  ", &ff);
+//! assert!(res.is_err())
+//! ```
+//! 
+//! If you need to handle fields in arbitrary order, use [`from_str_with_fields`] instead.
+//! You will need to parse the input enough to get the field names and order. Once you
+//! have that, you can do:
+//! 
+//! ```
+//! # use fortformat::serde_error::SResult;
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::de::from_str_with_fields;
+//! # 
+//! # #[derive(Debug, PartialEq, serde::Deserialize)]
+//! # struct Person {
+//! #     name: String,
+//! #     age: i32,
+//! #     weight: f32,
+//! # }
+//! let ff = FortFormat::parse("(f8.1,i3,1x,a10)").unwrap();
+//! let fieldnames = ["weight", "age", "name"];
+//! let p: Person = from_str_with_fields("   180.5 30 John Doe  ", &ff, &fieldnames).unwrap();
+//! assert_eq!(p, Person{name: "John Doe".to_string(), age: 30, weight: 180.5});
+//! ```
+//! 
+//! # Deserializing nested structures
+//! 
+//! ## Known data order
+//! 
+//! Data formatted by Fortran tends to be flat (without nesting) unlike e.g. JSON. However,
+//! we can translate such data into nested data structures. If you can rely on the order
+//! of the fields to match the data (such that you can use [`from_str`]), then nested structures
+//! will deserialize as you expect:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::de::from_str;
+//! 
+//! #[derive(Debug, PartialEq, serde::Deserialize)]
+//! struct Location {
+//!     name: String,
+//!     coords: Coordinates
+//! }
+//! 
+//! #[derive(Debug, PartialEq, serde::Deserialize)]
+//! struct Coordinates {
+//!     x: i32,
+//!     y: i32
+//! }
+//! 
+//! let ff = FortFormat::parse("(a5,1x,i3,1x,i3)").unwrap();
+//! let loc: Location = from_str("First 123 456", &ff).unwrap();
+//! assert_eq!(loc, Location{ name: "First".to_string(), coords: Coordinates{ x: 123, y: 456 }})
+//! ```
+//! 
+//! This works because the deserializer knows that no Fortran format specifier represents a structure.
+//! In this case its process it:
+//! 
+//! 1. Try to deserialize the "a5" string into the `name` field. The types match so this works and it advances
+//!    to the next format specifier.
+//! 2. Inspect the next field. It is a struct, so descend into it and do not try to parse the next specified value ("i3").
+//! 3. Inside `coords`, it finds an integer. This is a type it can deserialize, so it parses the next part of
+//!    the string according to the "i3" format, since that type matches the `x` field.
+//! 4. Repeat for the `y` field.
+//! 
+//! Essentially, the deserializer will only try to consume a format specifier when visiting a non-compound field 
+//! on a structure.
+//! 
+//! ## Unknown data order
+//! 
+//! If you want to deserialize into a nested structure and you do not know (or cannot trust) the order of the
+//! fields in the data, then you will need to use serde's `flatten` attribute as in the following:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::de::from_str_with_fields;
+//! 
+//! #[derive(Debug, PartialEq, serde::Deserialize)]
+//! struct Location {
+//!     name: String,
+//!     #[serde(flatten)]
+//!     coords: Coordinates
+//! }
+//! 
+//! #[derive(Debug, PartialEq, serde::Deserialize)]
+//! struct Coordinates {
+//!     x: i32,
+//!     y: i32
+//! }
+//! 
+//! let ff = FortFormat::parse("(i3,1x,i3,1x,a5)").unwrap();
+//! let loc: Location = from_str_with_fields("123 456 First", &ff, &["x", "y", "name"]).unwrap();
+//! assert_eq!(loc, Location{ name: "First".to_string(), coords: Coordinates{ x: 123, y: 456 }})
+//! ```
+//! 
+//! Without `#[serde(flatten)]` on the `Location.coords` field, the deserializer would expect there to
+//! be a field name "coords" in the list. In this case, `flatten` is needed to hint to it ahead of time
+//! that `coords` isn't a field in the data, but its own fields are.
+//! 
+//! # Adjusting deserialization settings
+//! 
+//! Fortran has some other quirks that we want to ignore most of the time. For example, strings in Fortran
+//! are fixed-length arrays, usually padded with spaces if the actual string is shorter than the array.
+//! Normally, we trim whitespace from Fortran strings so that the returned value is sensible for Rust.
+//! However, if that leading or trailing whitespace matters, you can disable this behavior by using
+//! [`from_str_custom`] or [`from_str_with_fields_custom`] and passing an instance of [`DeSettings`]:
+//! 
+//! ```
+//! use fortformat::format_specs::FortFormat;
+//! use fortformat::de::{from_str, from_str_custom, DeSettings};
+//! 
+//! let ff = FortFormat::parse("(a10)").unwrap();
+//! let s: String = from_str("Hello     ", &ff).unwrap();
+//! assert_eq!(s, "Hello");  // trailing whitespace has been trimmed
+//! 
+//! let settings = DeSettings::default()
+//!     .do_trim(false);
+//! let s: String = from_str_custom("Hello     ", &ff, settings).unwrap();
+//! assert_eq!(s, "Hello     ");
+//! ```
+//! 
+//! Our convention is that deserializing functions that accept settings will end in `_custom`,
+//! and the non-custom version of those functions uses `DeSettings::default()`.
+
+use serde::de::{self, SeqAccess, MapAccess, Visitor};
 use crate::fort_error::FError;
 use crate::serde_error::{SResult, SError};
-use crate::format_specs::{FortFormat, FortField, RealFmt};
+use crate::format_specs::FortField;
+pub use crate::format_specs::{FortValue, FortFormat};
 use crate::parsing;
 
+/// Settings for deserializing Fortran data
+/// 
+/// To use, instantiate the default version with `DeSettings::default()` and
+/// modify the desired settings with the public methods:
+/// 
+/// ```
+/// # use fortformat::de::DeSettings;
+/// 
+/// let settings = DeSettings::default().do_trim(false);
+/// ```
+#[derive(Debug, Clone)]
+pub struct DeSettings {
+    trim_strings: bool,
+}
 
+impl DeSettings {
+    /// Set whether to trim leading and trailing whitespace from deserialized strings.
+    /// 
+    /// Default is `true`, i.e. do remove the whitespace.
+    pub fn do_trim(mut self, trim_strings: bool) -> Self {
+        self.trim_strings = trim_strings;
+        self
+    }
+}
+
+impl Default for DeSettings {
+    fn default() -> Self {
+        Self { trim_strings: true }
+    }
+}
+
+
+/// Deserialize data from a string in memory.
+/// 
+/// For structures, the fields will be deserialized in order
+/// (assuming `Deserialize` is derived). To use field names,
+/// see [`from_str_with_fields`].
 pub fn from_str<'a, T>(s: &'a str, fmt: &'a FortFormat) -> SResult<T> 
 where T: de::Deserialize<'a>
 {
-    let mut deserializer = Deserializer::from_str(s, fmt);
+    from_str_custom(s, fmt, DeSettings::default())
+}
+
+/// Deserialize data from a string in memory with customized settings.
+/// 
+/// For structures, the fields will be deserialized in order
+/// (assuming `Deserialize` is derived). To use field names,
+/// see [`from_str_with_fields_custom`].
+pub fn from_str_custom<'a, T>(s: &'a str, fmt: &'a FortFormat, settings: DeSettings) -> SResult<T> 
+where T: de::Deserialize<'a>
+{
+    let mut deserializer = Deserializer::from_str(s, fmt, settings);
     let t = T::deserialize(&mut deserializer)?;
     Ok(t)
 }
 
+/// Deserialize data from a string in memory with field names given.
+/// 
+/// For structures, the field names given as `fields` will be used to match values
+/// with the correct fields in the structure, rather than relying on order. If field names
+/// are not available (and you must rely on the order in the data), see [`from_str`].
 pub fn from_str_with_fields<'a, T>(s: &'a str, fmt: &'a FortFormat, fields: &'a[&'a str]) -> SResult<T> 
 where T: de::Deserialize<'a>
 {
-    let mut deserializer = Deserializer::from_str_with_fields(s, fmt, fields);
+    from_str_with_fields_custom(s, fmt, fields, DeSettings::default())
+}
+
+/// Deserialize data from a string in memory with field names given and customized settings.
+/// 
+/// For structures, the field names given as `fields` will be used to match values
+/// with the correct fields in the structure, rather than relying on order. If field names
+/// are not available (and you must rely on the order in the data), see [`from_str_custom`].
+pub fn from_str_with_fields_custom<'a, T>(s: &'a str, fmt: &'a FortFormat, fields: &'a[&'a str], settings: DeSettings) -> SResult<T> 
+where T: de::Deserialize<'a>
+{
+    let mut deserializer = Deserializer::from_str_with_fields(s, fmt, fields, settings);
     let t = T::deserialize(&mut deserializer)?;
     Ok(t)
 }
 
+/// Deserializer for Fortran-formatted data.
 pub struct Deserializer<'de> {
+    settings: DeSettings,
     input: &'de str,
     input_idx: usize,
     fmt: &'de FortFormat,
@@ -32,12 +266,12 @@ pub struct Deserializer<'de> {
 
 
 impl<'de> Deserializer<'de> {
-    pub fn from_str(input: &'de str, fmt: &'de FortFormat) -> Self {
-        Self { input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: None }
+    pub fn from_str(input: &'de str, fmt: &'de FortFormat, settings: DeSettings) -> Self {
+        Self { settings, input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: None }
     }
 
-    pub fn from_str_with_fields(input: &'de str, fmt: &'de FortFormat, fields: &'de[&'de str]) -> Self {
-        Self { input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: Some(fields) }
+    pub fn from_str_with_fields(input: &'de str, fmt: &'de FortFormat, fields: &'de[&'de str], settings: DeSettings) -> Self {
+        Self { settings, input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: Some(fields) }
     }
 
     fn advance_over_skips(&mut self) {
@@ -301,7 +535,11 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Char { width } = next_fmt {
             let s = self.next_n_chars(width.unwrap_or(1))?;
-            visitor.visit_borrowed_str(s)
+            if self.settings.trim_strings {
+                visitor.visit_borrowed_str(s.trim())
+            } else {
+                visitor.visit_borrowed_str(s)
+            }
         } else {
             Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "&str" })
         }
@@ -559,6 +797,90 @@ impl<'a, 'de> MapAccess<'de> for FieldSequence<'a, 'de> {
     }
 }
 
+// --------------------- //
+// VISITOR FOR FORTVALUE //
+// --------------------- //
+
+pub(crate) struct FortValueVisitor;
+
+impl<'de> Visitor<'de> for FortValueVisitor {
+    type Value = FortValue;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("any valid scalar Fortran value")
+    }
+
+    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(FortValue::Logical(v))
+    }
+
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(FortValue::Integer(v))
+    }
+
+    fn visit_u8<E>(self, v: u8) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.visit_i64(v.into())
+    }
+
+    fn visit_u16<E>(self, v: u16) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.visit_i64(v.into())
+    }
+
+    fn visit_u32<E>(self, v: u32) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.visit_i64(v.into())
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(FortValue::Real(v))
+    }
+
+    fn visit_char<E>(self, v: char) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.visit_str(v.encode_utf8(&mut [0u8; 4]))
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(FortValue::Char(v.to_string()))
+    }
+
+    fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        self.visit_str(v)
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(FortValue::Char(v))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde::Deserialize;
@@ -668,6 +990,10 @@ mod tests {
     fn test_de_string() -> SResult<()> {
         let ff = FortFormat::parse("(a16)")?;
         let s: String = from_str("Hello world!    ", &ff)?;
+        assert_eq!(s, "Hello world!");
+
+        let settings = DeSettings::default().do_trim(false);
+        let s: String = from_str_custom("Hello world!    ", &ff, settings)?;
         assert_eq!(s, "Hello world!    ");
         Ok(())
     }
@@ -840,6 +1166,41 @@ mod tests {
         let expected = Test { name: "spec1".to_string(), flag: 0, gases };
         assert_eq!(s, expected);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_de_scalar_fort_value() -> SResult<()> {
+        let v: FortValue = from_str("T", &FortFormat::parse("(l1)")?)?;
+        assert_eq!(v, FortValue::Logical(true));
+
+        let v: FortValue = from_str("123", &FortFormat::parse("(i3)")?)?;
+        assert_eq!(v, FortValue::Integer(123));
+
+        let v: FortValue = from_str("-456", &FortFormat::parse("(i4)")?)?;
+        assert_eq!(v, FortValue::Integer(-456));
+
+        let v: FortValue = from_str("9.5", &FortFormat::parse("(f3.1)")?)?;
+        assert_eq!(v, FortValue::Real(9.5));
+
+        let v: FortValue = from_str("abcde", &FortFormat::parse("(a5)")?)?;
+        assert_eq!(v, FortValue::Char("abcde".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_de_vector_fort_values() -> SResult<()> {
+        let ff = FortFormat::parse("(l1,1x,i3,1x,i4,1x,f4.1,1x,a5)")?;
+        let v: Vec<FortValue> = from_str("F 987 -123 -1.5 ZYXWV", &ff)?;
+        let expected = vec![
+            FortValue::Logical(false),
+            FortValue::Integer(987),
+            FortValue::Integer(-123),
+            FortValue::Real(-1.5),
+            FortValue::Char("ZYXWV".to_string())
+        ];
+        assert_eq!(v, expected);
         Ok(())
     }
 }
