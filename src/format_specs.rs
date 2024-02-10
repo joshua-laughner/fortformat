@@ -299,6 +299,10 @@ pub struct FortFormat {
 impl FortFormat {
     /// Parse a Fortran format string and return a `FortFormat` instance.
     /// 
+    /// The format string must include the opening and closing parentheses. That is,
+    /// `"(a)"` is valid, but `"a"` is not. Spaces, tabs, carriage returns, and newlines
+    /// are all considered whitespace and ignored in parsing.
+    /// 
     /// Returns an error if the format string has invalid syntax.
     pub fn parse(fmt_str: &str) -> PResult<Self> {
         let mut fields = vec![];
@@ -494,6 +498,14 @@ fn consume_req_width_and_prec(stack: &mut Vec<Pair<Rule>>, _kind: &str) -> PResu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_surrounding_whitespace() -> PResult<()> {
+        FortFormat::parse(" (a) \n")?;
+        FortFormat::parse(" (a) \r")?;
+        FortFormat::parse(" (a) \r\n")?;
+        Ok(())
+    }
 
     #[test]
     fn test_char() -> PResult<()> {
@@ -698,6 +710,13 @@ mod tests {
         let expected = expected.repeat(3);
 
         assert_eq!(v, expected, "Parsing {s} failed");
+        Ok(())
+    }
+
+    #[test]
+    fn ggg_runlog_format() -> PResult<()> {
+        let s = "(a1,a57,1x,2i4,f8.4,f8.3,f9.3,2f8.3,1x,f6.4,f8.3,f7.3,f7.2,3(1x,f5.4),2i9,1x,f14.11,i9,i3,1x,f5.3,i5,1x,a2,2(f6.1,f8.2,f5.1),f7.1,f7.4,f6.1,f6.0,f10.3,f7.0,f7.3)";
+        FortFormat::parse(s)?;
         Ok(())
     }
 }
