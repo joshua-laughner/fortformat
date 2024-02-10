@@ -305,12 +305,22 @@ impl<'de> Deserializer<'de> {
         }
     }
 
-    fn next_field(&self) -> Option<&str> {
+    fn curr_field(&self) -> Option<&str> {
         if let Some(fields) = self.fields {
             fields.get(self.field_idx).map(|f| *f)
         } else {
             panic!("Called next_field on a deserializer without fields")
         }
+    }
+
+    fn try_prev_field(&self) -> Option<&str> {
+        if self.field_idx == 0 {
+            return None;
+        }
+
+        self.fields.map(|f| f.get(self.field_idx - 1))
+            .flatten()
+            .map(|f| *f)
     }
 
     #[allow(dead_code)] // keeping this function for now in case it is needed later
@@ -392,7 +402,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             let b = parsing::parse_logical(substr)?;
             visitor.visit_bool(b)
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "bool" })
+            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "bool", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
     }
 
@@ -430,7 +440,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             };
             visitor.visit_i64(v)
         } else {
-                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "i64" })
+                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "i64", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
     }
 
@@ -468,7 +478,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 };
                 visitor.visit_u64(v)
             } else {
-                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "u64" })
+                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "u64", field_name: self.try_prev_field().map(|f| f.to_string()) })
             }
     }
 
@@ -504,7 +514,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             };
             visitor.visit_f64(v)
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "f64" })
+            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "f64", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
     }
 
@@ -521,10 +531,10 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 visitor.visit_char(c)
             },
             FortField::Char { width: _ } => {
-                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char (requires 'a' or 'a1' Fortran format)" })
+                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char (requires 'a' or 'a1' Fortran format)", field_name: self.try_prev_field().map(|f| f.to_string()) })
             },
             _ => {
-                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char" })
+                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char", field_name: self.try_prev_field().map(|f| f.to_string()) })
             }
         }
     }
@@ -541,7 +551,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 visitor.visit_borrowed_str(s)
             }
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "&str" })
+            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "&str", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
         
     }
@@ -755,7 +765,7 @@ impl<'de, 'a> SeqAccess<'de> for UnknownLenSeq<'a, 'de> {
         // to end the sequence, others are actual errors.
         match seed.deserialize(&mut *self.de) {
             Ok(el) => Ok(Some(el)),
-            Err(SError::FormatTypeMismatch { spec_type: _, serde_type: _ }) => {
+            Err(SError::FormatTypeMismatch { spec_type: _, serde_type: _, field_name: _ }) => {
                 self.de.rewind_fmt();
                 Ok(None)
             }, // different type than desired, stop deserialization.
@@ -783,7 +793,7 @@ impl<'a, 'de> MapAccess<'de> for FieldSequence<'a, 'de> {
     where
         K: de::DeserializeSeed<'de> {
         
-        if self.de.next_field().is_none() {
+        if self.de.curr_field().is_none() {
             return Ok(None)
         }
         

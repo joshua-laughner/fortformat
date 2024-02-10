@@ -13,7 +13,7 @@ pub enum SError {
     /// Indicates that the Fortran format string ended before all values/fields were deserialized.
     FormatSpecTooShort,
     /// Indicates a mismatch between the Rust type expected and the Fortran type in the specification.
-    FormatTypeMismatch{spec_type: FortField, serde_type: &'static str},
+    FormatTypeMismatch{spec_type: FortField, serde_type: &'static str, field_name: Option<String>},
     /// Indicates that the list of field names aligned with the Fortran data ended before all fields were deserialized.
     FieldListTooShort,
     /// Indicates that the data given ended before all values/fields were deserialized.
@@ -33,7 +33,7 @@ pub enum SError {
 impl SError {
     pub(crate) fn with_serde_type(self, serde_type: &'static str) -> Self {
         match self {
-            Self::FormatTypeMismatch { spec_type, serde_type: _ } => Self::FormatTypeMismatch { spec_type, serde_type },
+            Self::FormatTypeMismatch { spec_type, serde_type: _ , field_name} => Self::FormatTypeMismatch { spec_type, serde_type, field_name },
             _ => self
         }
     }
@@ -43,7 +43,13 @@ impl Display for SError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::FormatSpecTooShort => write!(f, "Format specifier ended before all fields of the structure to deserialize into were filled."),
-            Self::FormatTypeMismatch { spec_type, serde_type } => write!(f, "The next value in the format specifier was {spec_type}, but the structure to deserialize into expected a {serde_type}"),
+            Self::FormatTypeMismatch { spec_type, serde_type, field_name } => {
+                if let Some(field) = field_name {
+                    write!(f, "The next value in the format specifier for the field '{field}' was {spec_type}, but the structure to deserialize into expected a {serde_type}")
+                } else {
+                    write!(f, "The next value in the format specifier was {spec_type}, but the structure to deserialize into expected a {serde_type}")
+                }
+            },
             Self::FieldListTooShort => write!(f, "Field list ended before all fields of the structure to deserialize into were filled"),
             Self::InputEndedEarly => write!(f, "The input ended before deserialization was complete"),
             Self::ParsingError(e) => write!(f, "Error parsing value: {e}"),
