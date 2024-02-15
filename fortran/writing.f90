@@ -45,4 +45,14 @@ write(*, '(a1,z5,a1)') '|',42,'|'
 write(*, '(a1,z5.3,a1)') '|',42,'|'
 write(*, '(a1,z5,a1)') '|',-42,'|'
 write(*, '(a1,z5.3,a1)') '|',-42,'|'
+
+write(*, '(a1)') ' '
+write(*, *) 'Strings'
+
+write(*, '(a1,a,a1)') '|','abc','|'
+write(*, '(a1,a5,a1)') '|','abc','|'
+write(*, '(a1,a5,a1)') '|','abcde','|'
+write(*, '(a1,a5,a1)') '|','abcdef','|'
+write(*, '(a1,a,a1)') '|','abcdefg','|'
+    
 end program

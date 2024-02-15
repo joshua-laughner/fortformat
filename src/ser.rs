@@ -245,15 +245,35 @@ impl<'a, 'f, W: Write> ser::Serializer for &'a mut Serializer<'f, W> {
     }
 
     fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        self.serialize_str(&v.to_string())
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        self.serialize_bytes(v.as_bytes())
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        let next_fmt = *self.next_fmt()?;
+        if let FortField::Char { width } = next_fmt {
+            if let Some(width) = width {
+                let w = width as usize;
+                if v.len() >= w {
+                    self.buf.write(&v[..w])?;
+                } else {
+                    for _ in 0..(w - v.len()) {
+                        self.buf.write(b" ")?;
+                    }
+                    self.buf.write(v)?;
+                }
+                Ok(())
+            } else {
+                // With no width specified, the full string is written out with its exact length.
+                self.buf.write(v)?;
+                Ok(())
+            }
+        } else {
+            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char/str/bytes", field_name: self.try_prev_field().map(|f| f.to_string()) })
+        }
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
@@ -440,6 +460,9 @@ impl<'a, 'f, W: Write> ser::SerializeMap for &'a mut Serializer<'f, W> {
     }
 }
 
+// This will have to be a different structure; if it has known fields, then
+// this will have to build a Vec<Vec<u8>> to put the elements in the correct
+// order and write that to the buffer at the end. Same of SerializeMap.
 impl<'a, 'f, W: Write> ser::SerializeStruct for &'a mut Serializer<'f, W> {
     type Ok = ();
 
@@ -554,5 +577,31 @@ mod tests {
         assert_eq!(s, "  02A");
         let s = to_string(-42, &fmt).unwrap();
         assert_eq!(s, "*****");
+    }
+
+    #[test]
+    fn test_char() {
+        let fmt = FortFormat::parse("(a)").unwrap();
+        let s = to_string('x', &fmt).unwrap();
+        assert_eq!(s, "x");
+
+        let fmt = FortFormat::parse("(a2)").unwrap();
+        let s = to_string('x', &fmt).unwrap();
+        assert_eq!(s, " x");
+    }
+
+    #[test]
+    fn test_str() {
+        let fmt = FortFormat::parse("(a)").unwrap();
+        let s = to_string("abcde", &fmt).unwrap();
+        assert_eq!(s, "abcde");
+
+        let fmt = FortFormat::parse("(a5)").unwrap();
+        let s = to_string("abc", &fmt).unwrap();
+        assert_eq!(s, "  abc");
+        let s = to_string("abcde", &fmt).unwrap();
+        assert_eq!(s, "abcde");
+        let s = to_string("abcdefg", &fmt).unwrap();
+        assert_eq!(s, "abcde");
     }
 }
