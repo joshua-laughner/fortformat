@@ -168,7 +168,7 @@
 
 use serde::de::{self, SeqAccess, MapAccess, Visitor};
 use crate::fort_error::FError;
-use crate::serde_error::{SResult, SError};
+use crate::serde_error::{DResult, DError};
 use crate::format_specs::FortField;
 pub use crate::format_specs::{FortValue, FortFormat};
 use crate::parsing;
@@ -210,7 +210,7 @@ impl Default for DeSettings {
 /// For structures, the fields will be deserialized in order
 /// (assuming `Deserialize` is derived). To use field names,
 /// see [`from_str_with_fields`].
-pub fn from_str<'a, T>(s: &'a str, fmt: &'a FortFormat) -> SResult<T> 
+pub fn from_str<'a, T>(s: &'a str, fmt: &'a FortFormat) -> DResult<T> 
 where T: de::Deserialize<'a>
 {
     from_str_custom(s, fmt, DeSettings::default())
@@ -221,7 +221,7 @@ where T: de::Deserialize<'a>
 /// For structures, the fields will be deserialized in order
 /// (assuming `Deserialize` is derived). To use field names,
 /// see [`from_str_with_fields_custom`].
-pub fn from_str_custom<'a, T>(s: &'a str, fmt: &'a FortFormat, settings: DeSettings) -> SResult<T> 
+pub fn from_str_custom<'a, T>(s: &'a str, fmt: &'a FortFormat, settings: DeSettings) -> DResult<T> 
 where T: de::Deserialize<'a>
 {
     let mut deserializer = Deserializer::from_str(s, fmt, settings);
@@ -234,7 +234,7 @@ where T: de::Deserialize<'a>
 /// For structures, the field names given as `fields` will be used to match values
 /// with the correct fields in the structure, rather than relying on order. If field names
 /// are not available (and you must rely on the order in the data), see [`from_str`].
-pub fn from_str_with_fields<'a, T>(s: &'a str, fmt: &'a FortFormat, fields: &'a[&'a str]) -> SResult<T> 
+pub fn from_str_with_fields<'a, T>(s: &'a str, fmt: &'a FortFormat, fields: &'a[&'a str]) -> DResult<T> 
 where T: de::Deserialize<'a>
 {
     from_str_with_fields_custom(s, fmt, fields, DeSettings::default())
@@ -245,7 +245,7 @@ where T: de::Deserialize<'a>
 /// For structures, the field names given as `fields` will be used to match values
 /// with the correct fields in the structure, rather than relying on order. If field names
 /// are not available (and you must rely on the order in the data), see [`from_str_custom`].
-pub fn from_str_with_fields_custom<'a, T>(s: &'a str, fmt: &'a FortFormat, fields: &'a[&'a str], settings: DeSettings) -> SResult<T> 
+pub fn from_str_with_fields_custom<'a, T>(s: &'a str, fmt: &'a FortFormat, fields: &'a[&'a str], settings: DeSettings) -> DResult<T> 
 where T: de::Deserialize<'a>
 {
     let mut deserializer = Deserializer::from_str_with_fields(s, fmt, fields, settings);
@@ -290,7 +290,7 @@ impl<'de> Deserializer<'de> {
         }
     }
 
-    fn next_fmt(&mut self) -> SResult<&FortField> {
+    fn next_fmt(&mut self) -> DResult<&FortField> {
         self.advance_over_skips();
         loop {
             let next_fmt = self.fmt.fields.get(self.fmt_idx);
@@ -300,7 +300,7 @@ impl<'de> Deserializer<'de> {
                     self.field_idx += 1;
                     return Ok(field)
                 },
-                None => return Err(SError::FormatSpecTooShort)
+                None => return Err(DError::FormatSpecTooShort)
             }
         }
     }
@@ -341,7 +341,7 @@ impl<'de> Deserializer<'de> {
 
     }
 
-    fn next_n_chars(&mut self, n: u32) -> Result<&'de str, SError> {
+    fn next_n_chars(&mut self, n: u32) -> Result<&'de str, DError> {
         let n: usize = n.try_into().expect("Could not fit u32 into usize");
         let mut nbytes = 0;
         let mut i = 0;
@@ -352,7 +352,7 @@ impl<'de> Deserializer<'de> {
         }
 
         if i < n {
-            return Err(SError::InputEndedEarly)
+            return Err(DError::InputEndedEarly)
         }
 
         let s = &self.input[self.input_idx..self.input_idx+nbytes];
@@ -376,7 +376,7 @@ impl<'de> Deserializer<'de> {
 }
 
 impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
-    type Error = SError;
+    type Error = DError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
@@ -384,7 +384,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 
         // Note: this was needed to deserialize a struct with an inner flattened struct
         match self.peek_fmt() {
-            None => Err(SError::FormatSpecTooShort),
+            None => Err(DError::FormatSpecTooShort),
             Some(FortField::Char { width: _ }) => self.deserialize_str(visitor),
             Some(FortField::Integer { width: _, zeros: _, base: _ }) => self.deserialize_i64(visitor),
             Some(FortField::Logical { width: _ }) => self.deserialize_bool(visitor),
@@ -402,7 +402,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             let b = parsing::parse_logical(substr)?;
             visitor.visit_bool(b)
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "bool", field_name: self.try_prev_field().map(|f| f.to_string()) })
+            Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "bool", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
     }
 
@@ -440,7 +440,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             };
             visitor.visit_i64(v)
         } else {
-                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "i64", field_name: self.try_prev_field().map(|f| f.to_string()) })
+                Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "i64", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
     }
 
@@ -478,7 +478,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 };
                 visitor.visit_u64(v)
             } else {
-                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "u64", field_name: self.try_prev_field().map(|f| f.to_string()) })
+                Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "u64", field_name: self.try_prev_field().map(|f| f.to_string()) })
             }
     }
 
@@ -514,7 +514,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             };
             visitor.visit_f64(v)
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "f64", field_name: self.try_prev_field().map(|f| f.to_string()) })
+            Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "f64", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
     }
 
@@ -531,10 +531,10 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 visitor.visit_char(c)
             },
             FortField::Char { width: _ } => {
-                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char (requires 'a' or 'a1' Fortran format)", field_name: self.try_prev_field().map(|f| f.to_string()) })
+                Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char (requires 'a' or 'a1' Fortran format)", field_name: self.try_prev_field().map(|f| f.to_string()) })
             },
             _ => {
-                Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char", field_name: self.try_prev_field().map(|f| f.to_string()) })
+                Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char", field_name: self.try_prev_field().map(|f| f.to_string()) })
             }
         }
     }
@@ -551,7 +551,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 visitor.visit_borrowed_str(s)
             }
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "&str", field_name: self.try_prev_field().map(|f| f.to_string()) })
+            Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "&str", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
         
     }
@@ -682,7 +682,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         if let Some(fields) = self.fields {
             let this_field = fields.get(self.field_idx)
                 .map(|f| *f)
-                .ok_or_else(|| SError::FieldListTooShort)?;
+                .ok_or_else(|| DError::FieldListTooShort)?;
             visitor.visit_borrowed_str(this_field)
         } else {
             // Note: as of 2023-10-20, this else clause isn't supporting a specific data
@@ -715,7 +715,7 @@ impl<'a, 'de> KnownLenSeq<'a, 'de> {
 }
 
 impl<'de, 'a> SeqAccess<'de> for KnownLenSeq<'a, 'de> {
-    type Error = SError;
+    type Error = DError;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
     where
@@ -747,7 +747,7 @@ impl<'a, 'de> UnknownLenSeq<'a, 'de> {
 }
 
 impl<'de, 'a> SeqAccess<'de> for UnknownLenSeq<'a, 'de> {
-    type Error = SError;
+    type Error = DError;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
     where
@@ -765,12 +765,12 @@ impl<'de, 'a> SeqAccess<'de> for UnknownLenSeq<'a, 'de> {
         // to end the sequence, others are actual errors.
         match seed.deserialize(&mut *self.de) {
             Ok(el) => Ok(Some(el)),
-            Err(SError::FormatTypeMismatch { spec_type: _, serde_type: _, field_name: _ }) => {
+            Err(DError::FormatTypeMismatch { spec_type: _, serde_type: _, field_name: _ }) => {
                 self.de.rewind_fmt();
                 Ok(None)
             }, // different type than desired, stop deserialization.
-            Err(SError::FormatSpecTooShort) => Ok(None), // nothing more in the format spec list, stop deserialization
-            Err(SError::InputEndedEarly) => Ok(None), // no more input, stop deserialization
+            Err(DError::FormatSpecTooShort) => Ok(None), // nothing more in the format spec list, stop deserialization
+            Err(DError::InputEndedEarly) => Ok(None), // no more input, stop deserialization
             Err(e) => Err(e) // other errors are actually problems
         }
     }
@@ -787,7 +787,7 @@ impl<'a, 'de> FieldSequence<'a, 'de> {
 }
 
 impl<'a, 'de> MapAccess<'de> for FieldSequence<'a, 'de> {
-    type Error = SError;
+    type Error = DError;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
     where
@@ -898,7 +898,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_de_bool() -> SResult<()> {
+    fn test_de_bool() -> DResult<()> {
         let ff = FortFormat::parse("(l1)")?;
         let b: bool = from_str("T", &ff)?;
         assert_eq!(b, true);
@@ -906,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_integer() -> SResult<()> {
+    fn test_de_integer() -> DResult<()> {
         let ff = FortFormat::parse("(i2)")?;
         let i: i8 = from_str(" 8", &ff)?;
         assert_eq!(i, 8);
@@ -938,7 +938,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_float() -> SResult<()> {
+    fn test_de_float() -> DResult<()> {
         let ff = FortFormat::parse("(f8)")?;
         let r: f64 = from_str("12.45678", &ff)?;
         assert_eq!(r, 12.45678);
@@ -997,7 +997,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_string() -> SResult<()> {
+    fn test_de_string() -> DResult<()> {
         let ff = FortFormat::parse("(a16)")?;
         let s: String = from_str("Hello world!    ", &ff)?;
         assert_eq!(s, "Hello world!");
@@ -1009,7 +1009,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_tuple() -> SResult<()> {
+    fn test_de_tuple() -> DResult<()> {
         let ff = FortFormat::parse("(a1,1x,i2,1x,i4)")?;
         let t: (char, i32, i32) = from_str("a 16 9876", &ff)?;
         assert_eq!(t, ('a', 16, 9876));
@@ -1017,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_vec() -> SResult<()> {
+    fn test_de_vec() -> DResult<()> {
         let ff = FortFormat::parse("5(i3,1x)")?;
         let v: Vec<i32> = from_str("123 456 789 246 369", &ff)?;
         assert_eq!(&v, &[123, 456, 789, 246, 369]);
@@ -1025,7 +1025,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_vec_in_tuple() -> SResult<()> {
+    fn test_de_vec_in_tuple() -> DResult<()> {
         let ff = FortFormat::parse("(a5,1x,3i3,a5)")?;
         let t: (String, Vec<i32>, String) = from_str("Hello 12 34 56 World", &ff)?;
         assert_eq!(t, ("Hello".to_owned(), vec![12, 34, 56], "World".to_owned()));
@@ -1033,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_struct() -> SResult<()> {
+    fn test_de_struct() -> DResult<()> {
         #[derive(Debug, PartialEq, Eq, Deserialize)]
         struct Test {
             x: i32,
@@ -1050,7 +1050,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_struct_with_array() -> SResult<()> {
+    fn test_de_struct_with_array() -> DResult<()> {
         #[derive(Debug, PartialEq, Eq, Deserialize)]
         struct Test {
             flag: bool,
@@ -1065,7 +1065,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_struct_with_fields() -> SResult<()> {
+    fn test_de_struct_with_fields() -> DResult<()> {
         #[derive(Debug, PartialEq, Deserialize)]
         struct Test {
             alpha: i32,
@@ -1087,7 +1087,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_struct_with_inner_struct() -> SResult<()> {
+    fn test_de_struct_with_inner_struct() -> DResult<()> {
         #[derive(Debug, PartialEq, Deserialize)]
         struct Inner {
             x: i32,
@@ -1116,7 +1116,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_inner_struct_not_flattened() -> SResult<()> {
+    fn test_de_inner_struct_not_flattened() -> DResult<()> {
         #[derive(Debug, PartialEq, Deserialize)]
         struct Inner {
             x: i32,
@@ -1132,7 +1132,7 @@ mod tests {
 
         let ff = FortFormat::parse("(a2,1x,i1,1x,i3,1x,i3)")?;
         let fields = ["sid", "flag", "y", "x"];
-        let s: SResult<Outer> = from_str_with_fields(
+        let s: DResult<Outer> = from_str_with_fields(
             "pa 0 456 123",
             &ff,
             &fields
@@ -1153,7 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extra_fields_map() -> SResult<()> {
+    fn test_extra_fields_map() -> DResult<()> {
         #[derive(Debug, PartialEq, Deserialize)]
         struct Test {
             name: String,
@@ -1180,7 +1180,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_scalar_fort_value() -> SResult<()> {
+    fn test_de_scalar_fort_value() -> DResult<()> {
         let v: FortValue = from_str("T", &FortFormat::parse("(l1)")?)?;
         assert_eq!(v, FortValue::Logical(true));
 
@@ -1200,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn test_de_vector_fort_values() -> SResult<()> {
+    fn test_de_vector_fort_values() -> DResult<()> {
         let ff = FortFormat::parse("(l1,1x,i3,1x,i4,1x,f4.1,1x,a5)")?;
         let v: Vec<FortValue> = from_str("F 987 -123 -1.5 ZYXWV", &ff)?;
         let expected = vec![

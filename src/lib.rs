@@ -8,5 +8,7 @@ pub(crate) mod parsing;
 pub mod serde_error;
 #[cfg(feature = "serde")]
 pub mod de;
+#[cfg(feature = "serde")]
+pub mod ser;
 #[cfg(feature = "dataframes")]
 pub mod dataframes;

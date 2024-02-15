@@ -5,7 +5,7 @@ use polars::frame::row::Row;
 use polars::prelude::{AnyValue, DataFrame, Field, Schema};
 
 use crate::format_specs::FortValue;
-use crate::{format_specs::FortFormat, serde_error::{SResult, SError}};
+use crate::{format_specs::FortFormat, serde_error::{DResult, DError}};
 
 
 /// Read a table with a known Fortran format and column names into a dataframe
@@ -26,9 +26,9 @@ use crate::{format_specs::FortFormat, serde_error::{SResult, SError}};
 /// reads in the entirety of `f`, which may be a significant amount of memory. If you only need to use
 /// one row of data at a time with arbitrary field names and value types, consider deserializing each row to a
 /// [`HashMap`](std::collections::HashMap) of [`FortValue`]s instead.
-pub fn read_to_dataframe<R: std::io::Read, S: AsRef<str>>(f: BufReader<R>, fmt: &FortFormat, colnames: &[S]) -> SResult<DataFrame> {
+pub fn read_to_dataframe<R: std::io::Read, S: AsRef<str>>(f: BufReader<R>, fmt: &FortFormat, colnames: &[S]) -> DResult<DataFrame> {
     if fmt.non_pos_len() < colnames.len() {
-        return Err(SError::FormatSpecTooShort)
+        return Err(DError::FormatSpecTooShort)
     }
 
     // For the dataframe column schema, we can infer the datatypes from the Fortran format
@@ -47,11 +47,11 @@ pub fn read_to_dataframe<R: std::io::Read, S: AsRef<str>>(f: BufReader<R>, fmt: 
 
     let mut rows = vec![];
     for (line_num, line) in f.lines().enumerate() {
-        let line = line.map_err(|e| SError::TableReadError(e, line_num + 1))?;
+        let line = line.map_err(|e| DError::TableReadError(e, line_num + 1))?;
         let values: Vec<FortValue> = crate::de::from_str(&line, fmt)?;
         let this_row: Vec<AnyValue> = values.into_iter().map(|v| v.into()).collect();
         if this_row.len() != colnames.len() {
-            return Err(SError::TableLineEndedEarly { line_num: line_num + 1, ncol: colnames.len() })
+            return Err(DError::TableLineEndedEarly { line_num: line_num + 1, ncol: colnames.len() })
         }
         rows.push(Row::new(this_row));
     }
@@ -67,7 +67,7 @@ mod tests {
     use stringreader::StringReader;
 
     #[test]
-    fn test_to_dataframe() -> SResult<()> {
+    fn test_to_dataframe() -> DResult<()> {
         let table = StringReader::new("Alpha T 1234  9.5\nBeta  F -678 -1.5");
         let table = BufReader::new(table);
         let ff = FortFormat::parse("(a5,1x,l1,1x,i4,1x,f4.1)")?;
@@ -95,13 +95,13 @@ mod tests {
     }
 
     #[test]
-    fn test_line_short() -> SResult<()> {
+    fn test_line_short() -> DResult<()> {
         let table = StringReader::new("Alpha T 1234\nBeta  F -678 -1.5");
         let table = BufReader::new(table);
         let ff = FortFormat::parse("(a5,1x,l1,1x,i4,1x,f4.1)")?;
         let err = read_to_dataframe(table, &ff, &["Name", "Flag", "ID", "Score"]).unwrap_err();
 
-        if let SError::TableLineEndedEarly { line_num, ncol } = err {
+        if let DError::TableLineEndedEarly { line_num, ncol } = err {
             assert_eq!(line_num, 1);
             assert_eq!(ncol, 4);
         } else {
