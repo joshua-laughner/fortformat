@@ -1,6 +1,7 @@
 //! Errors in serializing/deseralizing Fortran-formatted data
 use std::{fmt::Display, error::Error};
 use serde::{ser, de};
+use crate::de::FortFormat;
 use crate::format_specs::{FortField, PError};
 use crate::fort_error::FError;
 
@@ -84,5 +85,86 @@ impl From<FError> for SError {
 impl From<PError> for SError {
     fn from(value: PError) -> Self {
         Self::FormatError(value)
+    }
+}
+
+
+pub(crate) struct SerdeFormat<'de> {
+    pub(crate) fmt: &'de FortFormat,
+    pub(crate) fmt_idx: usize,
+    pub(crate) field_idx: usize,
+    pub(crate) fields: Option<&'de [&'de str]>,
+}
+
+impl<'de> SerdeFormat<'de> {
+    pub(crate) fn advance_over_skips(&mut self) -> usize {
+        let mut nchars = 0;
+        loop {
+            // Consume any skips (i.e. 1x, 2x) in the format, also advancing
+            // the internal string. This can be modified to handle other types
+            // of Fortran positioning formats in the future.
+            let peeked_fmt = self.fmt.fields.get(self.fmt_idx);
+            match peeked_fmt {
+                Some(&FortField::Skip) => {
+                    self.fmt_idx += 1;
+                    nchars += 1;
+                }
+                _ => return nchars,
+            }
+        }
+    }
+
+    pub(crate) fn next_fmt(&mut self) -> SResult<&FortField> {
+        if self.peek_fmt() == Some(&FortField::Skip) {
+            panic!("Internal error: advance_over_skips() must be called before next_fmt()");
+        }
+        
+        loop {
+            let next_fmt = self.fmt.fields.get(self.fmt_idx);
+            match next_fmt {
+                Some(field) => {
+                    self.fmt_idx += 1;
+                    self.field_idx += 1;
+                    return Ok(field)
+                },
+                None => return Err(SError::FormatSpecTooShort)
+            }
+        }
+    }
+
+    pub(crate) fn curr_field(&self) -> Option<&str> {
+        if let Some(fields) = self.fields {
+            fields.get(self.field_idx).map(|f| *f)
+        } else {
+            panic!("Called next_field on a deserializer without fields")
+        }
+    }
+
+    pub(crate) fn try_prev_field(&self) -> Option<&str> {
+        if self.field_idx == 0 {
+            return None;
+        }
+
+        self.fields.map(|f| f.get(self.field_idx - 1))
+            .flatten()
+            .map(|f| *f)
+    }
+
+    #[allow(dead_code)] // keeping this function for now in case it is needed later
+    pub(crate) fn peek_fmt(&mut self) -> Option<&FortField> {
+        self.advance_over_skips();
+        self.fmt.fields.get(self.fmt_idx)
+    }
+
+    pub(crate) fn rewind_fmt(&mut self) {
+        if self.fmt_idx == 0 {
+            return;
+        }
+
+        // None of the deserializers consume characters until the format has been matched,
+        // so we only need to reset the format and field indices, not the character index.
+        self.fmt_idx = self.fmt_idx.saturating_sub(1);
+        self.field_idx = self.field_idx.saturating_sub(1);
+
     }
 }

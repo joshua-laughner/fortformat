@@ -5,7 +5,7 @@ pub mod fort_error;
 pub mod format_specs;
 pub(crate) mod parsing;
 #[cfg(feature = "serde")]
-pub mod serde_error;
+pub mod serde_common;
 #[cfg(feature = "serde")]
 pub mod de;
 #[cfg(feature = "dataframes")]

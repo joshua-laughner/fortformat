@@ -168,7 +168,7 @@
 
 use serde::de::{self, SeqAccess, MapAccess, Visitor};
 use crate::fort_error::FError;
-use crate::serde_error::{SResult, SError};
+use crate::serde_common::{SError, SResult, SerdeFormat};
 use crate::format_specs::FortField;
 pub use crate::format_specs::{FortValue, FortFormat};
 use crate::parsing;
@@ -258,69 +258,43 @@ pub struct Deserializer<'de> {
     settings: DeSettings,
     input: &'de str,
     input_idx: usize,
-    fmt: &'de FortFormat,
-    fmt_idx: usize,
-    field_idx: usize,
-    fields: Option<&'de [&'de str]>,
+    inner_format: SerdeFormat,
 }
 
 
 impl<'de> Deserializer<'de> {
     pub fn from_str(input: &'de str, fmt: &'de FortFormat, settings: DeSettings) -> Self {
-        Self { settings, input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: None }
+        let inner_format = SerdeFormat {
+            fmt, fmt_idx: 0, field_idx: 0, fields: None
+        };
+        Self { settings, input, input_idx: 0, inner_format }
     }
 
     pub fn from_str_with_fields(input: &'de str, fmt: &'de FortFormat, fields: &'de[&'de str], settings: DeSettings) -> Self {
-        Self { settings, input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: Some(fields) }
+        let inner_format = SerdeFormat {
+            fmt, fmt_idx: 0, field_idx: 0, fields: Some(fields)
+        };
+        Self { settings, input, input_idx: 0, inner_format }
     }
 
     fn advance_over_skips(&mut self) {
-        loop {
-            // Consume any skips (i.e. 1x, 2x) in the format, also advancing
-            // the internal string. This can be modified to handle other types
-            // of Fortran positioning formats in the future.
-            let peeked_fmt = self.fmt.fields.get(self.fmt_idx);
-            match peeked_fmt {
-                Some(&FortField::Skip) => {
-                    self.fmt_idx += 1;
-                    let _ = self.next_n_chars(1);
-                }
-                _ => return,
-            }
+        let n = self.inner_format.advance_over_skips();
+        if n > 0 {
+            let _ = self.next_n_chars(n);
         }
     }
 
     fn next_fmt(&mut self) -> SResult<&FortField> {
         self.advance_over_skips();
-        loop {
-            let next_fmt = self.fmt.fields.get(self.fmt_idx);
-            match next_fmt {
-                Some(field) => {
-                    self.fmt_idx += 1;
-                    self.field_idx += 1;
-                    return Ok(field)
-                },
-                None => return Err(SError::FormatSpecTooShort)
-            }
-        }
+        self.inner_format.next_fmt()
     }
 
     fn curr_field(&self) -> Option<&str> {
-        if let Some(fields) = self.fields {
-            fields.get(self.field_idx).map(|f| *f)
-        } else {
-            panic!("Called next_field on a deserializer without fields")
-        }
+        self.inner_format.curr_field()
     }
 
     fn try_prev_field(&self) -> Option<&str> {
-        if self.field_idx == 0 {
-            return None;
-        }
-
-        self.fields.map(|f| f.get(self.field_idx - 1))
-            .flatten()
-            .map(|f| *f)
+        self.inner_format.try_prev_field()
     }
 
     #[allow(dead_code)] // keeping this function for now in case it is needed later

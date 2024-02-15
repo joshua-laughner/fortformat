@@ -5,7 +5,7 @@ use polars::frame::row::Row;
 use polars::prelude::{AnyValue, DataFrame, Field, Schema};
 
 use crate::format_specs::FortValue;
-use crate::{format_specs::FortFormat, serde_error::{SResult, SError}};
+use crate::{format_specs::FortFormat, serde_common::{SResult, SError}};
 
 
 /// Read a table with a known Fortran format and column names into a dataframe
