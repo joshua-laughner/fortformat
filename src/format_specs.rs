@@ -339,7 +339,6 @@ impl FortFormat {
 
                 Rule::scale => {
                     curr_scale = consume_signed_from_pair(pair).unwrap_or(0);
-                    println!("curr_scale = {curr_scale}");
                     continue;
                 },
 

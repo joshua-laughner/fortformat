@@ -21,6 +21,8 @@ pub enum SError {
     FormatError(PError),
     /// Indicates an error writing the data
     WriteError(std::io::Error),
+    /// Indicates that a format cannot be used for output
+    InvalidOutputFmt(FortField, String),
     /// Indicates a failure during serialization
     SerializationFailure(String),
     /// Indicates that the buffered bytes could not be converted to a UTF8 string
@@ -41,6 +43,7 @@ impl Display for SError {
             Self::ParsingError(e) => write!(f, "Error parsing value: {e}"),
             Self::FormatError(e) => write!(f, "Error parsing format: {e}"),
             Self::WriteError(e) => write!(f, "Error writing data: {e}"),
+            Self::InvalidOutputFmt(field, msg) => write!(f, "'{field} is not valid for an output format: {msg}"),
             Self::SerializationFailure(msg) => write!(f, "Error serializing data: {msg}"),
             Self::UnicodeError(e) => write!(f, "Serialized data includes invalid unicode: {e}")
         }

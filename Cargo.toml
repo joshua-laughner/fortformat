@@ -11,10 +11,11 @@ pest_derive = "2.5.3"
 polars = {version = "0.35", default-features = false, features = ["rows", "fmt"], optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 itoa = { version = "1.0", optional = true }
+ryu_floating_decimal = {version = "0.1.0", optional = true}
 
 [dev-dependencies]
 stringreader = "0.1.1" # needed for tests to mock an input file
 
 [features]
-serde = ["dep:serde", "dep:itoa"]
+serde = ["dep:serde", "dep:itoa", "dep:ryu_floating_decimal"]
 dataframes = ["dep:polars", "serde"]
