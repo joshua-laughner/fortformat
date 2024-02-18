@@ -1,4 +1,5 @@
 //! Errors in serializing/deseralizing Fortran-formatted data
+use std::rc::Rc;
 use std::string::FromUtf8Error;
 use std::{fmt::Display, error::Error};
 use serde::{ser, de};
@@ -23,6 +24,10 @@ pub enum SError {
     WriteError(std::io::Error),
     /// Indicates that a format cannot be used for output
     InvalidOutputFmt(FortField, String),
+    /// Indicates that an arbitrary key could not be converted to a string when matching up with fields
+    KeyToFieldError(Rc<Self>),
+    /// Indicates that a field name/key could not be found in the list of fields
+    FieldMissingError(String),
     /// Indicates a failure during serialization
     SerializationFailure(String),
     /// Indicates that the buffered bytes could not be converted to a UTF8 string
@@ -44,6 +49,8 @@ impl Display for SError {
             Self::FormatError(e) => write!(f, "Error parsing format: {e}"),
             Self::WriteError(e) => write!(f, "Error writing data: {e}"),
             Self::InvalidOutputFmt(field, msg) => write!(f, "'{field} is not valid for an output format: {msg}"),
+            Self::KeyToFieldError(e) => write!(f, "Unable to convert one of the map keys to a string to compare with field names, error was: {e}"),
+            Self::FieldMissingError(field) => write!(f, "Unable to find the field '{field}' in the list of field names"),
             Self::SerializationFailure(msg) => write!(f, "Error serializing data: {msg}"),
             Self::UnicodeError(e) => write!(f, "Serialized data includes invalid unicode: {e}")
         }

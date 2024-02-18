@@ -14,6 +14,7 @@
 use std::fmt::Display;
 
 use pest::{Parser, iterators::Pair, RuleType};
+use serde::Serialize;
 
 type PResult<T> = std::result::Result<T, PError>;
 
@@ -238,6 +239,20 @@ impl<'de> serde::Deserialize<'de> for FortValue {
     where
         D: serde::Deserializer<'de> {
         deserializer.deserialize_any(crate::de::FortValueVisitor)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for FortValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        match self {
+            FortValue::Logical(b) => b.serialize(serializer),
+            FortValue::Char(s) => s.serialize(serializer),
+            FortValue::Integer(i) => i.serialize(serializer),
+            FortValue::Real(r) => r.serialize(serializer),
+        }
     }
 }
 
