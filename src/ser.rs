@@ -1,8 +1,8 @@
-use std::{fmt::{Octal, UpperHex}, io::{Bytes, Write}, rc::Rc, string::FromUtf8Error};
+use std::{fmt::{Octal, UpperHex}, io::Write, rc::Rc, string::FromUtf8Error};
 
 use ryu_floating_decimal::d2d;
 use serde::ser;
-use crate::{de::{FortFormat, FortValue}, format_specs::{FortField, IntBase, RealFmt}, serde_error::{SError, SResult}};
+use crate::{de::FortFormat, format_specs::{FortField, IntBase, RealFmt}, serde_error::{SError, SResult}};
 
 pub fn to_string<T>(value: T, fmt: &FortFormat) -> SResult<String> 
 where T: ser::Serialize
@@ -12,12 +12,46 @@ where T: ser::Serialize
     Ok(serializer.try_into_string()?)
 }
 
+pub fn to_string_with_fields<T>(value: T, fmt: &FortFormat, fields: &[&str]) -> SResult<String> 
+    where T: ser::Serialize
+    {
+        let mut serializer = Serializer::new_with_fields(fmt, fields);
+        value.serialize(&mut serializer)?;
+        Ok(serializer.try_into_string()?)
+    }
+
 pub fn to_bytes<T>(value: T, fmt: &FortFormat) -> SResult<Vec<u8>> 
 where T: ser::Serialize    
 {
     let mut serializer = Serializer::new(fmt);
     value.serialize(&mut serializer)?;
     Ok(serializer.into_bytes())
+}
+
+pub fn to_bytes_with_fields<T>(value: T, fmt: &FortFormat, fields: &[&str]) -> SResult<Vec<u8>> 
+    where T: ser::Serialize    
+    {
+        let mut serializer = Serializer::new_with_fields(fmt, fields);
+        value.serialize(&mut serializer)?;
+        Ok(serializer.into_bytes())
+    }
+
+#[derive(Debug, Default)]
+struct MapSerHelper {
+    next_field_index: Option<usize>,
+    next_field_fmt: Option<FortField>,
+    data: Vec<Option<Vec<u8>>>,
+    in_use: bool
+}
+
+impl MapSerHelper {
+    fn take_validate_data(&mut self) -> Vec<Option<Vec<u8>>> {
+        let data = std::mem::take(&mut self.data);
+        self.next_field_fmt = None;
+        self.next_field_index = None;
+        self.in_use = false;
+        data
+    }
 }
 
 /// Serializer for Fortran-format writers
@@ -27,15 +61,16 @@ struct Serializer<'f, W: Write> {
     fmt_idx: usize,
     fields: Option<&'f[ &'f str]>,
     field_idx: usize,
+    map_helper: MapSerHelper,
 }
 
 impl<'f> Serializer<'f, Vec<u8>> {
     pub fn new(fmt: &'f FortFormat) -> Self {
-        Self { buf: vec![], fmt, fmt_idx: 0, fields: None, field_idx: 0 }
+        Self { buf: vec![], fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default() }
     }
 
     pub fn new_with_fields(fmt: &'f FortFormat, fields: &'f[&'f str]) -> Self {
-        Self { buf: vec![], fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0 }
+        Self { buf: vec![], fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default() }
     }
 
     pub fn into_bytes(self) -> Vec<u8> {
@@ -49,38 +84,39 @@ impl<'f> Serializer<'f, Vec<u8>> {
 
 impl <'f, W: Write> Serializer<'f, W> {
     pub fn new_writer(fmt: &'f FortFormat, writer: W) -> Self {
-        Self { buf: writer, fmt, fmt_idx: 0, fields: None, field_idx: 0 }
+        Self { buf: writer, fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default() }
     }
 
     pub fn new_writer_with_fields(fmt: &'f FortFormat, fields: &'f[&'f str], writer: W) -> Self {
-        Self { buf: writer, fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0 }
+        Self { buf: writer, fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default() }
     }
 }
 
-impl<'f, W: Write> Serializer<'f, W> {
+impl<'f, W: Write + 'f> Serializer<'f, W> {
     // This shares a lot of code with the Deserializer. I tried refactoring that out
     // into an inner struct, but that ended up being more awkward because the inner
     // struct didn't know about the Deserializer's input string. Another option
     // might be a trait that requires defining advance_over_skips and methods
     // to increment indices and get formats/field names - will explore later.
 
-    fn advance_over_skips(&mut self) {
+    fn advance_over_skips(&mut self) -> std::io::Result<()> {
         loop {
-            // Consume any skips (i.e. 1x, 2x) in the format, also advancing
-            // the internal string. This can be modified to handle other types
+            // Consume any skips (i.e. 1x, 2x) in the format, also adding space
+            // to the output. This can be modified to handle other types
             // of Fortran positioning formats in the future.
             let peeked_fmt = self.fmt.fields.get(self.fmt_idx);
             match peeked_fmt {
                 Some(&FortField::Skip) => {
+                    self.buf.write(b" ")?;
                     self.fmt_idx += 1;
                 }
-                _ => return,
+                _ => return Ok(()),
             }
         }
     }
 
     fn next_fmt(&mut self) -> SResult<&FortField> {
-        self.advance_over_skips();
+        self.advance_over_skips()?;
         loop {
             let next_fmt = self.fmt.fields.get(self.fmt_idx);
             match next_fmt {
@@ -112,44 +148,43 @@ impl<'f, W: Write> Serializer<'f, W> {
             .map(|f| *f)
     }
 
-    #[allow(dead_code)] // keeping this function for now in case it is needed later
     fn peek_fmt(&mut self) -> Option<&FortField> {
-        self.advance_over_skips();
-        self.fmt.fields.get(self.fmt_idx)
-    }
-
-    fn rewind_fmt(&mut self) {
-        if self.fmt_idx == 0 {
-            return;
+        // We don't use advance_over_skips() here because that writes
+        // things to the buffer, which a peek shouldn't do (and which
+        // might fail).
+        let mut i = self.fmt_idx;
+        loop {
+            let fmt = self.fmt.fields.get(i)?;
+            if !fmt.is_positional() {
+                return Some(fmt);
+            }
+            i += 1;
         }
-
-        // None of the deserializers consume characters until the format has been matched,
-        // so we only need to reset the format and field indices, not the character index.
-        self.fmt_idx = self.fmt_idx.saturating_sub(1);
-        self.field_idx = self.field_idx.saturating_sub(1);
-
     }
 
     fn get_nth_nonskip_fmt(&self, n: usize) -> Option<&FortField> {
         let mut i = 0;
+        let mut j = 0;
         loop {
-            let fmt = self.fmt.fields.get(i)?;
+            let fmt = self.fmt.fields.get(j)?;
             if !fmt.is_positional() && i == n {
                 return Some(fmt)
             } else if !fmt.is_positional() {
                 i += 1;
             }
+            j += 1;
         }
     }
 
-    fn get_fmt_and_index_offset_for_field(&self, field_name: &str) -> Option<(usize, &FortField)> {
+    fn get_fmt_and_index_offset_for_field(&self, field_name: &str) -> Option<(usize, FortField)> {
         if let Some(fields) = self.fields {
             let mut i = 0;
             for &fname in &fields[self.field_idx..] {
                 if field_name == fname {
                     let fmt = self.get_nth_nonskip_fmt(self.field_idx + i)?;
-                    return Some((i, fmt));
+                    return Some((i, *fmt));
                 }
+                i += 1;
             }
             None
         } else {
@@ -164,7 +199,7 @@ impl<'f, W: Write> Serializer<'f, W> {
     /// Panics if the input slice does not have the number of bytes expected for the next format.
     /// It is the caller's responsibility to ensure that the correct number of bytes are provided.
     fn write_next_entry_raw(&mut self, bytes: &[u8]) -> SResult<()> {
-        self.advance_over_skips();
+        self.advance_over_skips()?;
         let nbytes = match *self.next_fmt()? {
             FortField::Char { width } => width.unwrap_or(1),
             FortField::Logical { width } => width,
@@ -208,6 +243,57 @@ impl<'f, W: Write> Serializer<'f, W> {
             Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "float", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
     }
+
+    fn serialize_key_helper(&mut self, field: &str) -> SResult<()> {
+        if self.fields.is_some() {
+            let (offset, fmt) = self.get_fmt_and_index_offset_for_field(field)
+                .ok_or_else(|| SError::FieldMissingError(field.to_string()))?;
+            self.map_helper.next_field_index = Some(offset);
+            self.map_helper.next_field_fmt = Some(fmt);
+            Ok(())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn serialize_value_helper<T: ?Sized>(&mut self, value: &T) -> SResult<()>
+    where
+        T: serde::Serialize {
+        if self.fields.is_none() {
+            return value.serialize(&mut *self);
+        }
+
+        if let (Some(offset), Some(fmt)) = (self.map_helper.next_field_index, self.map_helper.next_field_fmt) {
+            while self.map_helper.data.len() <= offset {
+                self.map_helper.data.push(None);
+            }
+
+            // TODO: I don't think this will work for fields that are themselves structures or maps. Will need
+            // to iterate.
+            let fortfmt = FortFormat{ fields: vec![fmt] };
+            let bytes = to_bytes(value, &fortfmt)?;
+            self.map_helper.data[offset] = Some(bytes);
+        } else {
+            panic!("serialize_key must be called before serialize_value when field names are given.");
+        }
+
+        Ok(())
+    }
+
+    fn end_helper(&mut self) -> SResult<()> {
+        if self.map_helper.next_field_index.is_some() {
+            for maybe_bytes in self.map_helper.take_validate_data() {
+                if let Some(bytes) = maybe_bytes {
+                    self.write_next_entry_raw(&bytes)?;
+                } else {
+                    let field_name = self.curr_field().unwrap_or("?");
+                    unimplemented!("The field {field_name} did not have a value, but a later field did. This is not handled yet.");
+                }
+            }
+        }
+        Ok(())
+        
+    }
 }
 
 
@@ -221,9 +307,9 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
     type SerializeTuple = Self;
     type SerializeTupleStruct = Self;
     type SerializeTupleVariant = Self;
-    type SerializeMap = MapSerializer<'a, 'f, W>;
-    type SerializeStruct = MapSerializer<'a, 'f, W>;
-    type SerializeStructVariant = MapSerializer<'a, 'f, W>;
+    type SerializeMap = Self;
+    type SerializeStruct = Self;
+    type SerializeStructVariant = Self;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
         let next_fmt = *self.next_fmt()?;
@@ -333,7 +419,7 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
         todo!()
     }
 
-    fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error> {
+    fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
         todo!()
     }
 
@@ -410,26 +496,34 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        let map_ser = MapSerializer::new(self);
-        Ok(map_ser)
+        if self.map_helper.in_use {
+            unimplemented!("Can't yet recursively call serialize_map - the map_helper must be reset before the next call")
+        }
+        Ok(self)
     }
 
     fn serialize_struct(
         self,
-        name: &'static str,
-        len: usize,
+        _name: &'static str,
+        _len: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
-        todo!()
+        if self.map_helper.in_use {
+            unimplemented!("Can't yet recursively call serialize_map - the map_helper must be reset before the next call")
+        }
+        Ok(self)
     }
 
     fn serialize_struct_variant(
         self,
-        name: &'static str,
-        variant_index: u32,
-        variant: &'static str,
-        len: usize,
+        _name: &'static str,
+        _variant_index: u32,
+        _variant: &'static str,
+        _len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        todo!()
+        if self.map_helper.in_use {
+            unimplemented!("Can't yet recursively call serialize_map - the map_helper must be reset before the next call")
+        }
+        Ok(self)
     }
 }
 
@@ -509,78 +603,7 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeTupleVariant for &'a mut Serializer<'f
 }
 
 
-struct MapSerializer<'a, 'f, W: Write> {
-    serializer: &'a mut Serializer<'f, W>,
-    next_field_index: Option<usize>,
-    next_field_fmt: Option<FortField>,
-    data: Vec<Option<Vec<u8>>>,
-}
-
-impl<'a, 'f, W: Write + 'f> MapSerializer<'a, 'f, W> {
-    fn new(serializer: &'f mut Serializer<'f, W>) -> Self {
-        // If we didn't define field names on the serializer, then
-        // we'll just assign values in order.
-        // Otherwise we'll need to be more clever about this and put
-        // the data in the proper order. This will be handled in the
-        // serialization by extending data as necessary to put the
-        // value in the correct place relative to the current index
-        // within the serializer
-        Self { serializer, next_field_index: None, next_field_fmt: None, data: vec![] }
-    }
-
-    fn serialize_key_helper(&mut self, field: &str) -> SResult<()> {
-        if self.serializer.fields.is_some() {
-            let (offset, fmt) = self.serializer.get_fmt_and_index_offset_for_field(field)
-                .ok_or_else(|| SError::FieldMissingError(field.to_string()))?;
-            self.next_field_index = Some(offset);
-            self.next_field_fmt = Some(*fmt);
-            Ok(())
-        } else {
-            Ok(())
-        }
-    }
-
-    fn serialize_value_helper<T: ?Sized>(&mut self, value: &T) -> SResult<()>
-    where
-        T: serde::Serialize {
-        if self.serializer.fields.is_none() {
-            return value.serialize(&mut *self.serializer);
-        }
-
-        if let (Some(offset), Some(fmt)) = (self.next_field_index, self.next_field_fmt) {
-            while self.data.len() <= offset {
-                self.data.push(None);
-            }
-
-            // TODO: I don't think this will work for fields that are themselves structures or maps. Will need
-            // to iterate.
-            let fortfmt = FortFormat{ fields: vec![fmt] };
-            let bytes = to_bytes(value, &fortfmt)?;
-            self.data[offset] = Some(bytes);
-        } else {
-            panic!("serialize_key must be called before serialize_value when field names are given.");
-        }
-
-        Ok(())
-    }
-
-    fn end_helper(self) -> SResult<()> {
-        if self.next_field_index.is_some() {
-            for maybe_bytes in self.data {
-                if let Some(bytes) = maybe_bytes {
-                    self.serializer.write_next_entry_raw(&bytes)?;
-                } else {
-                    let field_name = self.serializer.curr_field().unwrap_or("?");
-                    unimplemented!("The field {field_name} did not have a value, but a later field did. This is not handled yet.");
-                }
-            }
-        }
-        Ok(())
-        
-    }
-}
-
-impl<'a, 'f, W: Write + 'f> ser::SerializeMap for MapSerializer<'a, 'f, W> {
+impl<'a, 'f, W: Write + 'f> ser::SerializeMap for &'a mut Serializer<'f, W> {
     type Ok = ();
 
     type Error = SError;
@@ -588,14 +611,14 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeMap for MapSerializer<'a, 'f, W> {
     fn serialize_key<T: ?Sized>(&mut self, key: &T) -> Result<(), Self::Error>
     where
         T: serde::Serialize {
-        if self.serializer.fields.is_some() {
+        if self.fields.is_some() {
             // This is weird, but since all we know about key is that it is serializable
             // the best we can do is serialize it to a string and check against the field
             // names
             let fmt = FortFormat::parse("(a512)").unwrap();
             let key_string = to_string(key, &fmt)
                 .map_err(|e| SError::KeyToFieldError(Rc::new(e)))?;
-            self.serialize_key_helper(&key_string)
+            self.serialize_key_helper(key_string.trim())
         } else {
             Ok(())
         }
@@ -615,7 +638,7 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeMap for MapSerializer<'a, 'f, W> {
 // This will have to be a different structure; if it has known fields, then
 // this will have to build a Vec<Vec<u8>> to put the elements in the correct
 // order and write that to the buffer at the end. Same of SerializeMap.
-impl<'a, 'f, W: Write> ser::SerializeStruct for MapSerializer<'a, 'f, W> {
+impl<'a, 'f, W: Write + 'f> ser::SerializeStruct for &'a mut Serializer<'f, W> {
     type Ok = ();
 
     type Error = SError;
@@ -627,7 +650,7 @@ impl<'a, 'f, W: Write> ser::SerializeStruct for MapSerializer<'a, 'f, W> {
     ) -> Result<(), Self::Error>
     where
         T: serde::Serialize {
-        if self.serializer.fields.is_some() {
+        if self.fields.is_some() {
             self.serialize_key_helper(key)?;
         }
         self.serialize_value_helper(value)
@@ -638,7 +661,7 @@ impl<'a, 'f, W: Write> ser::SerializeStruct for MapSerializer<'a, 'f, W> {
     }
 }
 
-impl<'a, 'f, W: Write> ser::SerializeStructVariant for MapSerializer<'a, 'f, W> {
+impl<'a, 'f, W: Write + 'f> ser::SerializeStructVariant for &'a mut Serializer<'f, W> {
     type Ok = ();
 
     type Error = SError;
@@ -650,7 +673,7 @@ impl<'a, 'f, W: Write> ser::SerializeStructVariant for MapSerializer<'a, 'f, W> 
     ) -> Result<(), Self::Error>
     where
         T: serde::Serialize {
-        if self.serializer.fields.is_some() {
+        if self.fields.is_some() {
             self.serialize_key_helper(key)?;
         }
         self.serialize_value_helper(value)
@@ -839,7 +862,29 @@ fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+
+    #[derive(Debug, serde::Serialize)]
+    struct Test {
+        a: &'static str,
+        b: i32,
+        c: f64
+    }
+
+    #[derive(Debug, serde::Serialize)]
+    struct HasFlat {
+        name: &'static str,
+        #[serde(flatten)]
+        data: HashMap<String, i32>
+    }
+
+    #[derive(Debug, serde::Serialize)]
+    struct Nested {
+        db_id: i64,
+        inner: Test
+    }
 
     #[test]
     fn test_ser_bool() {
@@ -1021,5 +1066,80 @@ mod tests {
         let s = to_string(3.14, &fmt).unwrap();
         assert_eq!(s, "   0.003D+03");
 
+    }
+
+    #[test]
+    fn test_vec() {
+        let fmt = FortFormat::parse("(i3.3,1x,i4.4,1x,i5.5)").unwrap();
+        let s = to_string(vec![10,200,3000], &fmt).unwrap();
+        assert_eq!(s, "010 0200 03000");
+    }
+
+    #[test]
+    fn test_tuple() {
+        let fmt = FortFormat::parse("(a3,1x,i3.3)").unwrap();
+        let s = to_string(("Hi!", 42), &fmt).unwrap();
+        assert_eq!(s, "Hi! 042");
+    }
+
+    #[test]
+    fn test_struct_by_order() {
+        let fmt = FortFormat::parse("(a6,1x,i3,1x,e8.3)").unwrap();
+        let value = Test { a: "Hello", b: 42, c: 3.14 };
+        let s = to_string(value, &fmt).unwrap();
+        assert_eq!(s, " Hello  42 .314E+01");
+    }
+
+    #[test]
+    fn test_struct_by_name() {
+        let fmt = FortFormat::parse("(i3,1x,e8.3,1x,a6)").unwrap();
+        let value = Test { a: "Hello", b: 42, c: 3.14 };
+        let s = to_string_with_fields(value, &fmt, &["b", "c", "a"]).unwrap();
+        assert_eq!(s, " 42 .314E+01  Hello");
+    }
+
+    #[test]
+    fn test_map_by_name() {
+        let value = HashMap::from([
+            ("a", 2),
+            ("b", 4),
+            ("c", 8)
+        ]);
+        let fmt = FortFormat::parse("(3i2)").unwrap();
+        let s= to_string_with_fields(value, &fmt, &["b", "a", "c"]).unwrap();
+        assert_eq!(s, " 4 2 8");
+    }
+
+    #[test]
+    fn test_struct_with_flattened_map() {
+        let data = HashMap::from([
+            ("co2".to_string(), 400_000),
+            ("ch4".to_string(), 1900),
+            ("n2o".to_string(), 310),
+            ("co".to_string(), 100)
+        ]);
+        let value = HasFlat { name: "pa", data };
+        let fmt = FortFormat::parse("(a2,4(1x,i6))").unwrap();
+        let s = to_string_with_fields(value, &fmt, &["name", "n2o", "co", "co2", "ch4"]).unwrap();
+        assert_eq!(s, "pa    310    100 400000   1900");
+    }
+
+    #[test]
+    fn test_nested_struct_by_order() {
+        let inner = Test { a: "Hello", b: 42, c: 3.14 };
+        let value = Nested { db_id: 1, inner };
+        let fmt = FortFormat::parse("(i2,1x,a5,1x,i2,1x,e8.3)").unwrap();
+        let s = to_string(value, &fmt).unwrap();
+        assert_eq!(s, " 1 Hello 42 .314E+01");
+    }
+
+    #[test]
+    fn test_nested_struct_by_name() {
+        let inner = Test { a: "Hello", b: 42, c: 3.14 };
+        let value = Nested { db_id: 1, inner };
+        let fmt = FortFormat::parse("(e8.3,1x,i2,1x,a5,1x,i1)").unwrap();
+        // this gives a "missing field 'inner' error", which is what we expected for now.
+        let e = to_string_with_fields(value, &fmt, &["c", "b", "a", "db_id"]);
+        assert!(e.is_err());
     }
 }
