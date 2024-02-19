@@ -183,47 +183,7 @@ impl<'f, W: Write> Serializer<'f, W> {
     fn serialize_integer<I: itoa::Integer + Octal + UpperHex>(&mut self, abs_value: I, is_neg: bool) -> SResult<()> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Integer { width, zeros, base } = next_fmt {
-            // wish that this didn't require allocating a vector, but I think this is the cleanest way
-            // to handle this, since we need to know the length of the serialized number before we
-            // can write.
-            let (s, is_dec): (Vec<u8>, bool) = match base {
-                IntBase::Decimal => {
-                    let mut b = itoa::Buffer::new();
-                    (b.format(abs_value).as_bytes().into_iter().copied().collect(), true)
-                },
-                IntBase::Octal => {
-                    (format!("{abs_value:o}").as_bytes().into_iter().copied().collect(), false)
-                },
-                IntBase::Hexadecimal => {
-                    (format!("{abs_value:X}").as_bytes().into_iter().copied().collect(), false)
-                },
-            };
-            
-
-            let nsign = if is_neg { 1 } else { 0 };
-            let nzeros = zeros.map(|n| n.saturating_sub(s.len() as u32)).unwrap_or(0);
-            let nchar = nzeros + nsign + s.len() as u32;
-            
-            let bad_output = nchar > width || (is_neg && !is_dec);
-            if bad_output {
-                for _ in 0..width {
-                    write!(&mut self.buf, "*")?;
-                }
-            } else {
-                let nspace = width - nchar;
-                for _ in 0..nspace {
-                    write!(&mut self.buf, " ")?;
-                }
-                if is_neg {
-                    write!(&mut self.buf, "-")?;
-                }
-                for _ in 0..nzeros {
-                    write!(&mut self.buf, "0")?;
-                }
-                self.buf.write(&s)?;
-            }
-            
-            Ok(())
+            serialize_integer(width, zeros, base, &mut self.buf, abs_value, is_neg)
         } else {
             Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "integer", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
@@ -239,138 +199,14 @@ impl<'f, W: Write> Serializer<'f, W> {
             // TODO: apparently E and D formats can specify the number of digits in the exponent, that will
             // need added to the format spec.
             match fmt {
-                RealFmt::D => self.serialize_real_exp(v, width, precision, scale, "D", None),
-                RealFmt::E => self.serialize_real_exp(v, width, precision, scale, "E", None),
+                RealFmt::D => serialize_real_exp(&mut self.buf, v, width, precision, scale, "D", None),
+                RealFmt::E => serialize_real_exp(&mut self.buf, v, width, precision, scale, "E", None),
                 RealFmt::F => todo!(),
                 RealFmt::G => todo!(),
             }
         } else {
             Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "float", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
-    }
-
-    fn serialize_real_exp(&mut self, v: f64, width: u32, precision: u32, scale: i32, exp_ch: &str, n_exp_digits: Option<u32>) -> SResult<()> {
-        let v_is_neg = v < 0.0;
-        let v = d2d(v);
-        
-        // This is complicated so some examples using e12.3 as the format
-        // Value    | Mantissa | Exponent | Fortran   | Representation 
-        // 3.14     | 314      | -2       | 0.314E+01 | (mantissa // 10^3).(mantissa % 10^3)E(exponent+3) 
-        // 0.0314   | 314      | -4       | 0.314E-01 | (mantissa // 10^3).(mantissa % 10^3)E(exponent+3)
-        // 3140.0   | 314      | +1       | 0.314E+04 | (mantissa // 10^3).(mantissa % 10^3)E(exponent+3)
-        // 3141.59  | 314159   | -2       | 0.314E+04 | (mantissa // 10^6).(mantissa % 10^6)E(exponent+6)
-        //
-        // Then scaling shifts where the decimal point is: +ve moves it right, -ve left. So 3.14 formatted
-        // as 1pe12.3 would look like 3.140E+00, and 2pe12.3 like 31.40E-01. With +ve scales, we end up with
-        // more sig figs (e.g. 3.1415 formatted as 1pe12.3 becomes 3.141E+00). With -ve scales, we keep the
-        // same number of digits after the decimal (so -2pe12.3 => 0.003E+03).
-        //
-        // Also as far as I can tell for spacing, a leading zero before the decimal is optional, but a negative
-        // sign is not. so .314E+01 will fit in an 8-wide format, but not a 7-wide. (At 9-wide it gets the leading 0.)
-        // If it's negative (-.314E+01), it needs at least 9 characters. At 10, it becomes -0.314E+01.
-        let mantissa = v.mantissa;
-        let mut b = itoa::Buffer::new();
-        let s = b.format(mantissa);
-        let m_bytes = s.as_bytes();
-        
-        
-        let exponent = v.exponent + m_bytes.len() as i32 - scale;
-        let mut b = itoa::Buffer::new();
-        let s = b.format(exponent.abs());
-        let e_bytes = s.as_bytes();
-        
-        // Include precision # digits, plus decimal point, and the exponent. If the number of digits
-        // in the exponent isn't given, it will always be 4 characters wide. (If it needs three digits,
-        // the 'E' or 'D' is dropped.) Otherwise it seems to be 2 for the E+ or E- and the number of digits.
-        // If the exponent won't fit, this is a number we can't format, so print out the *'s and return.
-        let exp_nchar = if let Some(n) = n_exp_digits {
-            if e_bytes.len() > n as usize {
-                for _ in 0..width {
-                    self.buf.write(b"*")?;
-                }
-                return Ok(())
-            }
-            n + 2
-        } else {
-            if e_bytes.len() > 3 {
-                for _ in 0..width {
-                    self.buf.write(b"*")?;
-                }
-                return Ok(())
-            }
-            4
-        };
-        let min_width = if v_is_neg { precision + 2 + exp_nchar } else { precision + 1 + exp_nchar};
-        if width < min_width {
-            for _ in 0..width {
-                self.buf.write(b"*")?;
-            }
-            return Ok(());
-        }
-
-        let nspaces = if width > min_width { width - min_width - 1 } else { 0 };
-        for _ in 0..nspaces {
-            self.buf.write(b" ")?;
-        }
-
-        if v_is_neg {
-            self.buf.write(b"-")?;
-        }
-
-        if scale > 0 {
-            let mut i = 0;
-            for _ in 0..scale {
-                let c = m_bytes.get(i..i+1).unwrap_or(b"0");
-                self.buf.write(c)?;
-                i += 1;
-            }
-            self.buf.write(b".")?;
-            let n_after_decimal = if scale <= 1 { precision } else { precision - scale as u32 + 1};
-            for _ in 0..n_after_decimal {
-                let c = m_bytes.get(i..i+1).unwrap_or(b"0");
-                self.buf.write(c)?;
-                i += 1;
-            }
-        } else {
-            if width > min_width {
-                // if we have at least one extra character, write the leading zero
-                self.buf.write(b"0")?;
-            }
-            self.buf.write(b".")?;
-            let mut i = 0;
-            for _ in 0..precision {
-                if i < -scale {
-                    self.buf.write(b"0")?;
-                } else {
-                    let j = (i + scale) as usize;
-                    let c = m_bytes.get(j..j+1).unwrap_or(b"0");
-                    self.buf.write(c)?;
-                }
-                i += 1;
-            }
-        }
-
-        let n_digits = if e_bytes.len() < (exp_nchar as usize) - 2 {
-            self.buf.write(exp_ch.as_bytes())?;
-            exp_nchar - 2
-        } else {
-            exp_nchar - 1
-        };
-
-        if exponent < 0 {
-            self.buf.write(b"-")?;
-        } else {
-            self.buf.write(b"+")?;
-        }
-
-        // Pad with 0s if needed
-        for _ in 0..(n_digits as usize - e_bytes.len()) {
-            self.buf.write(b"0")?;
-        }
-        self.buf.write(e_bytes)?;
-
-
-        Ok(())
     }
 }
 
@@ -385,9 +221,9 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
     type SerializeTuple = Self;
     type SerializeTupleStruct = Self;
     type SerializeTupleVariant = Self;
-    type SerializeMap = MapSerializer<'f, W>;
-    type SerializeStruct = MapSerializer<'f, W>;
-    type SerializeStructVariant = MapSerializer<'f, W>;
+    type SerializeMap = MapSerializer<'a, 'f, W>;
+    type SerializeStruct = MapSerializer<'a, 'f, W>;
+    type SerializeStructVariant = MapSerializer<'a, 'f, W>;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
         let next_fmt = *self.next_fmt()?;
@@ -673,14 +509,14 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeTupleVariant for &'a mut Serializer<'f
 }
 
 
-struct MapSerializer<'f, W: Write> {
-    serializer: &'f mut Serializer<'f, W>,
+struct MapSerializer<'a, 'f, W: Write> {
+    serializer: &'a mut Serializer<'f, W>,
     next_field_index: Option<usize>,
     next_field_fmt: Option<FortField>,
     data: Vec<Option<Vec<u8>>>,
 }
 
-impl<'f, W: Write + 'f> MapSerializer<'f, W> {
+impl<'a, 'f, W: Write + 'f> MapSerializer<'a, 'f, W> {
     fn new(serializer: &'f mut Serializer<'f, W>) -> Self {
         // If we didn't define field names on the serializer, then
         // we'll just assign values in order.
@@ -744,7 +580,7 @@ impl<'f, W: Write + 'f> MapSerializer<'f, W> {
     }
 }
 
-impl<'f, W: Write + 'f> ser::SerializeMap for MapSerializer<'f, W> {
+impl<'a, 'f, W: Write + 'f> ser::SerializeMap for MapSerializer<'a, 'f, W> {
     type Ok = ();
 
     type Error = SError;
@@ -779,7 +615,7 @@ impl<'f, W: Write + 'f> ser::SerializeMap for MapSerializer<'f, W> {
 // This will have to be a different structure; if it has known fields, then
 // this will have to build a Vec<Vec<u8>> to put the elements in the correct
 // order and write that to the buffer at the end. Same of SerializeMap.
-impl<'a, 'f, W: Write> ser::SerializeStruct for MapSerializer<'f, W> {
+impl<'a, 'f, W: Write> ser::SerializeStruct for MapSerializer<'a, 'f, W> {
     type Ok = ();
 
     type Error = SError;
@@ -802,7 +638,7 @@ impl<'a, 'f, W: Write> ser::SerializeStruct for MapSerializer<'f, W> {
     }
 }
 
-impl<'f, W: Write> ser::SerializeStructVariant for MapSerializer<'f, W> {
+impl<'a, 'f, W: Write> ser::SerializeStructVariant for MapSerializer<'a, 'f, W> {
     type Ok = ();
 
     type Error = SError;
@@ -823,6 +659,182 @@ impl<'f, W: Write> ser::SerializeStructVariant for MapSerializer<'f, W> {
     fn end(self) -> Result<Self::Ok, Self::Error> {
         self.end_helper()
     }
+}
+
+fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
+    width: u32,
+    zeros: Option<u32>,
+    base: IntBase,
+    mut buf: W, 
+    abs_value: I, 
+    is_neg: bool
+) -> SResult<()> {
+    // wish that this didn't require allocating a vector, but I think this is the cleanest way
+    // to handle this, since we need to know the length of the serialized number before we
+    // can write.
+    let (s, is_dec): (Vec<u8>, bool) = match base {
+        IntBase::Decimal => {
+            let mut b = itoa::Buffer::new();
+            (b.format(abs_value).as_bytes().into_iter().copied().collect(), true)
+        },
+        IntBase::Octal => {
+            (format!("{abs_value:o}").as_bytes().into_iter().copied().collect(), false)
+        },
+        IntBase::Hexadecimal => {
+            (format!("{abs_value:X}").as_bytes().into_iter().copied().collect(), false)
+        },
+    };
+    
+
+    let nsign = if is_neg { 1 } else { 0 };
+    let nzeros = zeros.map(|n| n.saturating_sub(s.len() as u32)).unwrap_or(0);
+    let nchar = nzeros + nsign + s.len() as u32;
+    
+    let bad_output = nchar > width || (is_neg && !is_dec);
+    if bad_output {
+        for _ in 0..width {
+            buf.write(b"*")?;
+        }
+    } else {
+        let nspace = width - nchar;
+        for _ in 0..nspace {
+            buf.write(b" ")?;
+        }
+        if is_neg {
+            buf.write(b"-")?;
+        }
+        for _ in 0..nzeros {
+            buf.write(b"0")?;
+        }
+        buf.write(&s)?;
+    }
+    
+    Ok(())
+}
+
+
+fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32, exp_ch: &str, n_exp_digits: Option<u32>) -> SResult<()> {
+    let v_is_neg = v < 0.0;
+    let v = d2d(v);
+    
+    // This is complicated so some examples using e12.3 as the format
+    // Value    | Mantissa | Exponent | Fortran   | Representation 
+    // 3.14     | 314      | -2       | 0.314E+01 | (mantissa // 10^3).(mantissa % 10^3)E(exponent+3) 
+    // 0.0314   | 314      | -4       | 0.314E-01 | (mantissa // 10^3).(mantissa % 10^3)E(exponent+3)
+    // 3140.0   | 314      | +1       | 0.314E+04 | (mantissa // 10^3).(mantissa % 10^3)E(exponent+3)
+    // 3141.59  | 314159   | -2       | 0.314E+04 | (mantissa // 10^6).(mantissa % 10^6)E(exponent+6)
+    //
+    // Then scaling shifts where the decimal point is: +ve moves it right, -ve left. So 3.14 formatted
+    // as 1pe12.3 would look like 3.140E+00, and 2pe12.3 like 31.40E-01. With +ve scales, we end up with
+    // more sig figs (e.g. 3.1415 formatted as 1pe12.3 becomes 3.141E+00). With -ve scales, we keep the
+    // same number of digits after the decimal (so -2pe12.3 => 0.003E+03).
+    //
+    // Also as far as I can tell for spacing, a leading zero before the decimal is optional, but a negative
+    // sign is not. so .314E+01 will fit in an 8-wide format, but not a 7-wide. (At 9-wide it gets the leading 0.)
+    // If it's negative (-.314E+01), it needs at least 9 characters. At 10, it becomes -0.314E+01.
+    let mantissa = v.mantissa;
+    let mut b = itoa::Buffer::new();
+    let s = b.format(mantissa);
+    let m_bytes = s.as_bytes();
+    
+    
+    let exponent = v.exponent + m_bytes.len() as i32 - scale;
+    let mut b = itoa::Buffer::new();
+    let s = b.format(exponent.abs());
+    let e_bytes = s.as_bytes();
+    
+    // Include precision # digits, plus decimal point, and the exponent. If the number of digits
+    // in the exponent isn't given, it will always be 4 characters wide. (If it needs three digits,
+    // the 'E' or 'D' is dropped.) Otherwise it seems to be 2 for the E+ or E- and the number of digits.
+    // If the exponent won't fit, this is a number we can't format, so print out the *'s and return.
+    let exp_nchar = if let Some(n) = n_exp_digits {
+        if e_bytes.len() > n as usize {
+            for _ in 0..width {
+                buf.write(b"*")?;
+            }
+            return Ok(())
+        }
+        n + 2
+    } else {
+        if e_bytes.len() > 3 {
+            for _ in 0..width {
+                buf.write(b"*")?;
+            }
+            return Ok(())
+        }
+        4
+    };
+    let min_width = if v_is_neg { precision + 2 + exp_nchar } else { precision + 1 + exp_nchar};
+    if width < min_width {
+        for _ in 0..width {
+            buf.write(b"*")?;
+        }
+        return Ok(());
+    }
+
+    let nspaces = if width > min_width { width - min_width - 1 } else { 0 };
+    for _ in 0..nspaces {
+        buf.write(b" ")?;
+    }
+
+    if v_is_neg {
+        buf.write(b"-")?;
+    }
+
+    if scale > 0 {
+        let mut i = 0;
+        for _ in 0..scale {
+            let c = m_bytes.get(i..i+1).unwrap_or(b"0");
+            buf.write(c)?;
+            i += 1;
+        }
+        buf.write(b".")?;
+        let n_after_decimal = if scale <= 1 { precision } else { precision - scale as u32 + 1};
+        for _ in 0..n_after_decimal {
+            let c = m_bytes.get(i..i+1).unwrap_or(b"0");
+            buf.write(c)?;
+            i += 1;
+        }
+    } else {
+        if width > min_width {
+            // if we have at least one extra character, write the leading zero
+            buf.write(b"0")?;
+        }
+        buf.write(b".")?;
+        let mut i = 0;
+        for _ in 0..precision {
+            if i < -scale {
+                buf.write(b"0")?;
+            } else {
+                let j = (i + scale) as usize;
+                let c = m_bytes.get(j..j+1).unwrap_or(b"0");
+                buf.write(c)?;
+            }
+            i += 1;
+        }
+    }
+
+    let n_digits = if e_bytes.len() < (exp_nchar as usize) - 2 {
+        buf.write(exp_ch.as_bytes())?;
+        exp_nchar - 2
+    } else {
+        exp_nchar - 1
+    };
+
+    if exponent < 0 {
+        buf.write(b"-")?;
+    } else {
+        buf.write(b"+")?;
+    }
+
+    // Pad with 0s if needed
+    for _ in 0..(n_digits as usize - e_bytes.len()) {
+        buf.write(b"0")?;
+    }
+    buf.write(e_bytes)?;
+
+
+    Ok(())
 }
 
 #[cfg(test)]
