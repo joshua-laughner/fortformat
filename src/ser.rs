@@ -236,7 +236,7 @@ impl<'f, W: Write + 'f> Serializer<'f, W> {
             match fmt {
                 RealFmt::D => serialize_real_exp(&mut self.buf, v, width, precision, scale, "D", None),
                 RealFmt::E => serialize_real_exp(&mut self.buf, v, width, precision, scale, "E", None),
-                RealFmt::F => todo!(),
+                RealFmt::F => serialize_real_f(&mut self.buf, v, width, precision, scale),
                 RealFmt::G => todo!(),
             }
         } else {
@@ -735,6 +735,86 @@ fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
     Ok(())
 }
 
+fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32) -> SResult<()> {
+    let v_is_neg = v < 0.0;
+    let v = d2d(v);
+    let mut b = itoa::Buffer::new();
+    let s = b.format(v.mantissa);
+    let m_bytes = s.as_bytes();
+    let exponent = v.exponent;
+
+    // For all numbers, we need the decimal place and the numbers after it. For negative numbers,
+    // we also need the negative sign.
+    let width = width as usize;
+    let n_reserved = if v_is_neg { 2 + precision } else { 1 + precision } as usize;
+
+    // Now we need to figure out how many digits to include before the decimal. Some examples:
+    // Value    | Mantissa | n_bytes | Exponent | # leading digits |
+    // 3.14     | 314      | 3       | -2       | 1                |
+    // 0.0314   | 314      | 3       | -4       | 0                |
+    // 3140.0   | 314      | 3       | +1       | 4                |
+    // 3141.59  | 314159   | 6       | -2       | 4                |
+    // So the number of leading digits is max(n_bytes + exponent, 0). Note that for the second example,
+    // the leading 0 will be handled specially.
+    // Then there's the leading zeros *after* the decimal point. These are only needed if the neg. of the
+    // exponent is greater than the number of bytes, in which case the difference is the number of zeros needed.
+    // We also need to consider the scale: a positive scale moves the decimal right, so it adds leading
+    // digits, and a negative one does the opposite.
+
+    // Now we have enough information to tell if the value is too wide.
+    let exp_plus_scale = (exponent + scale) as isize;
+    let n_leading_digits = m_bytes.len()
+        .saturating_add_signed(exp_plus_scale);
+    if n_leading_digits + n_reserved > width {
+        for _ in 0..width {
+            buf.write(b"*")?;
+        }
+        return Ok(())
+    }
+
+    let wants_leading_zero = n_leading_digits == 0;
+    let (n_spaces, print_leading_zero) = if !wants_leading_zero {
+        (width - n_reserved - n_leading_digits, false)
+    } else if n_leading_digits + n_reserved < width {
+        (width - n_reserved - n_leading_digits - 1, true)
+    } else {
+        (0, false)
+    };
+
+
+    let zeros_after_decimal = if exp_plus_scale >= 0 {
+        0
+    } else {
+        let nexp = (-exp_plus_scale) as usize;
+        nexp.saturating_sub(m_bytes.len())
+    };
+
+    for _ in 0..n_spaces {
+        buf.write(b" ")?;
+    }
+
+    if v_is_neg {
+        buf.write(b"-")?;
+    }
+
+    if print_leading_zero {
+        buf.write(b"0")?;
+    }
+
+    for i in 0..(n_leading_digits + precision as usize - zeros_after_decimal) {
+        if i == n_leading_digits {
+            buf.write(b".")?;
+            for _ in 0..zeros_after_decimal {
+                buf.write(b"0")?;
+            }
+        }
+        let i = i as usize;
+        let c = m_bytes.get(i..i+1).unwrap_or(b"0");
+        buf.write(c)?;
+    }
+    Ok(())
+}
+
 
 fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32, exp_ch: &str, n_exp_digits: Option<u32>) -> SResult<()> {
     let v_is_neg = v < 0.0;
@@ -982,6 +1062,33 @@ mod tests {
         assert_eq!(s, "abcde");
         let s = to_string("abcdefg", &fmt).unwrap();
         assert_eq!(s, "abcde");
+    }
+
+    #[test]
+    fn test_real_f() {
+        let fmt = FortFormat::parse("(f5.3)").unwrap();
+        let s = to_string(-0.01, &fmt).unwrap();
+        assert_eq!(s, "-.010");
+
+        let fmt = FortFormat::parse("(f4.3)").unwrap();
+        let s = to_string(0.314, &fmt).unwrap();
+        assert_eq!(s, ".314");
+
+        let fmt = FortFormat::parse("(f8.3)").unwrap();
+        let s = to_string(3.14, &fmt).unwrap();
+        assert_eq!(s, "   3.140");
+
+        let fmt = FortFormat::parse("(2pf8.3)").unwrap();
+        let s = to_string(3.14, &fmt).unwrap();
+        assert_eq!(s, " 314.000");
+
+        let fmt = FortFormat::parse("(-2pf8.3)").unwrap();
+        let s = to_string(3.14, &fmt).unwrap();
+        assert_eq!(s, "   0.031");
+
+        let fmt = FortFormat::parse("(2pf5.3)").unwrap();
+        let s = to_string(3.14, &fmt).unwrap();
+        assert_eq!(s, "*****");
     }
 
     #[test]
