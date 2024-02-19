@@ -1,9 +1,467 @@
+//! Serialize data according to a Fortran format string.
+//! 
+//! # Basic usage
+//! 
+//! This module expects that you have a Fortran format string, such as
+//! `(a10,i3,f8.2)` and want to serialize data according to that format. 
+//! The functions provided by this module belong to two groups: `to_*` and
+//! `to_*_with_fields`. The distinction mainly matters when serializing
+//! structures or maps. The `to_*` functions will output values in the order
+//! they are defined. That is, this example will work, because the fields in 
+//! `Person` are defined in the same order as they appear in the data:
+//! 
+//! ```
+//! use fortformat::format_specs::FortFormat;
+//! use fortformat::ser::to_string;
+//! 
+//! #[derive(Debug, PartialEq, serde::Serialize)]
+//! struct Person {
+//!     name: &'static str,
+//!     age: i32,
+//!     weight: f32,
+//! }
+//! 
+//! let ff = FortFormat::parse("(a10,i3,f8.1)").unwrap();
+//! let p = Person { name: "John Doe", age: 30, weight: 180.5 };
+//! let s = to_string(p, &ff).unwrap();
+//! assert_eq!(s, "  John Doe 30   180.5");
+//! ```
+//! 
+//! However, the next example will *not* work, because the field order does not match
+//! the data:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string;
+//! # 
+//! # #[derive(Debug, PartialEq, serde::Serialize)]
+//! # struct Person {
+//! #     name: String,
+//! #     age: i32,
+//! #     weight: f32,
+//! # }
+//! let ff = FortFormat::parse("(f8.1,i3,1x,a10)").unwrap();
+//! let p = Person { name: "John Doe".to_string(), age: 30, weight: 180.5 };
+//! let res = to_string(p, &ff);
+//! assert!(res.is_err())
+//! ```
+//! 
+//! If the order in which the fields need to be output is different from the order
+//! the fields are defined in the structure, then you need to use one of the `*_with_fields`
+//! functions:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string_with_fields;
+//! # 
+//! # #[derive(Debug, PartialEq, serde::Serialize)]
+//! # struct Person {
+//! #     name: String,
+//! #     age: i32,
+//! #     weight: f32,
+//! # }
+//! let ff = FortFormat::parse("(f8.1,i3,a10)").unwrap();
+//! let p = Person { name: "John Doe".to_string(), age: 30, weight: 180.5 };
+//! let fields = ["weight", "age", "name"];
+//! let s = to_string_with_fields(p, &ff, &fields).unwrap();
+//! assert_eq!(s, "   180.5 30  John Doe");
+//! ```
+//! 
+//! **Note: take special care with maps.** Most maps do not guarantee
+//! the order their values are visited, so using one of the serialization
+//! functions that doesn't take field names will usually result in undetermined
+//! order in which the data are written out.
+//! 
+//! # Serializing nested structures
+//! 
+//! Since Fortran formatted data does not have a way to represent nesting, this
+//! can be a little tricky. If relying on the order of structure fields, then you
+//! do not need to do anything special - the serializer will correctly recognize
+//! that only the bool, int, float, char, and str/String fields map to format
+//! fields:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string;
+//! 
+//! #[derive(Debug, PartialEq, serde::Serialize)]
+//! struct SiteInfo {
+//!     name: String,
+//!     coords: Coordinates
+//! }
+//! 
+//! #[derive(Debug, PartialEq, serde::Serialize)]
+//! struct Coordinates {
+//!     longitude: f32,
+//!     latitude: f32,
+//! }
+//! 
+//! let site = SiteInfo { 
+//!     name: "Ferris Island".to_string(),
+//!     coords: Coordinates { longitude: 1.0, latitude: -5.5 }
+//! };
+//! 
+//! let ff = FortFormat::parse("(a15,2f5.1)").unwrap();
+//! let s = to_string(&site, &ff).unwrap();
+//! assert_eq!(s, "  Ferris Island  1.0 -5.5");
+//! ```
+//! 
+//! However, the following example will return an error from the `to_string` function:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string_with_fields;
+//! # 
+//! # #[derive(Debug, PartialEq, serde::Serialize)]
+//! # struct SiteInfo {
+//! #     name: String,
+//! #     coords: Coordinates
+//! # }
+//! # 
+//! # #[derive(Debug, PartialEq, serde::Serialize)]
+//! # struct Coordinates {
+//! #     longitude: f32,
+//! #     latitude: f32,
+//! # }
+//! 
+//! let site = SiteInfo { 
+//!     name: "Ferris Island".to_string(),
+//!     coords: Coordinates { longitude: 1.0, latitude: -5.5 }
+//! };
+//! 
+//! let ff = FortFormat::parse("(a15,2f5.1)").unwrap();
+//! let fields = ["latitude", "longitude", "name"];
+//! let res = to_string_with_fields(&site, &ff, &fields);
+//! assert!(res.is_err());
+//! ```
+//! 
+//! Specifically, you would see an error that the "coords" field is missing.
+//! That is because, without the clue from the `#[serde(flatten)]` attribute
+//! that `coords` will not be one of the Fortran fields, the serializer can't
+//! tell that ahead of time. Adding `#[serde(flatten)]` to the `coords` field
+//! will fix this:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string_with_fields;
+//! 
+//! #[derive(Debug, PartialEq, serde::Serialize)]
+//! struct SiteInfo {
+//!     name: String,
+//!     #[serde(flatten)]
+//!     coords: Coordinates
+//! }
+//! 
+//! #[derive(Debug, PartialEq, serde::Serialize)]
+//! struct Coordinates {
+//!     longitude: f32,
+//!     latitude: f32,
+//! }
+//! 
+//! let site = SiteInfo { 
+//!     name: "Ferris Island".to_string(),
+//!     coords: Coordinates { longitude: 1.0, latitude: -5.5 }
+//! };
+//! 
+//! let ff = FortFormat::parse("(2f5.1,a15)").unwrap();
+//! let fields = ["latitude", "longitude", "name"];
+//! let s = to_string_with_fields(&site, &ff, &fields).unwrap();
+//! assert_eq!(s, " -5.5  1.0  Ferris Island");
+//! ```
+//! 
+//! You can also use `#[serde(flatten)]` on maps:
+//! 
+//! ```
+//! # use std::collections::HashMap;
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string_with_fields;
+//! 
+//! #[derive(Debug, PartialEq, serde::Serialize)]
+//! struct SiteInfo {
+//!     name: String,
+//!     #[serde(flatten)]
+//!     concentrations: HashMap<&'static str, f32>
+//! }
+//! 
+//! let concentrations = HashMap::from([
+//!     ("co2", 413.5),
+//!     ("ch4", 1899.3),
+//! ]);
+//! 
+//! let site = SiteInfo{ name: "Mauna Loa".to_string(), concentrations };
+//! let ff = FortFormat::parse("(a12,10f8.1)").unwrap();
+//! let fields = ["name", "co2", "ch4"];
+//! let s = to_string_with_fields(&site, &ff, &fields).unwrap();
+//! assert_eq!(s, "   Mauna Loa   413.5  1899.3");
+//! ```
+//! 
+//! Note in this last example that the number of fields in the format string, `(a12,10f8.1)`,
+//! is larger than the number of fields actually written. This is fine, and is a useful way
+//! to provide a format string that can handle a sequence of an unknown length as the last
+//! thing to be serialized: just make the format string long enough to cover the largest
+//! possible number of elements.
+//! 
+//! # Field names, tuples, vectors, or other sequences
+//! 
+//! If using field names, there must be one for each concrete value serialized. Consider
+//! this example:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string_with_fields;
+//! 
+//! #[derive(Debug, PartialEq, serde::Serialize)]
+//! struct Coordinates {
+//!     longitude: f32,
+//!     latitude: f32,
+//! }
+//! 
+//! let value = ("Ferris Island", Coordinates{ longitude: 1.0, latitude: -5.5 });
+//! let ff = FortFormat::parse("(a13,1x,f5.1,f5.1)").unwrap();
+//! let fields = ["latitude", "longitude"];
+//! let res = to_string_with_fields(value, &ff, &fields);
+//! assert!(res.is_err());
+//! ```
+//! 
+//! This fails because although "latitude" and "longitude" are our only two named fields
+//! in `Coordinates`, the serializer needs one field name for each non-positional format
+//! spec in the format string. (Positional specs are ones like `x` that add space but
+//! do not represent a value.) Here, the string that is the first tuple element must have
+//! a field, even if it is a placeholder. The following will work:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string_with_fields;
+//! # 
+//! # #[derive(Debug, PartialEq, serde::Serialize)]
+//! # struct Coordinates {
+//! #     longitude: f32,
+//! #     latitude: f32,
+//! # }
+//! # 
+//! let value = ("Ferris Island", Coordinates{ longitude: 1.0, latitude: -5.5 });
+//! let ff = FortFormat::parse("(a13,1x,f5.1,f5.1)").unwrap();
+//! let fields = ["", "latitude", "longitude"];
+//! let s = to_string_with_fields(value, &ff, &fields).unwrap();
+//! assert_eq!(s, "Ferris Island  -5.5  1.0");
+//! ```
+//! 
+//! Another potentially confusing case is when you have a vector of the same structure
+//! repeated and you pass field names. In the example below, you might expect that the
+//! serializer could get mixed up by the repeated field names. However, this works
+//! correctly:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string_with_fields;
+//! # 
+//! # #[derive(Debug, PartialEq, serde::Serialize)]
+//! # struct Coordinates {
+//! #     longitude: f32,
+//! #     latitude: f32,
+//! # }
+//! let value = vec![
+//!     Coordinates{ longitude: 1.0, latitude: -5.5 },
+//!     Coordinates{ longitude: -45.0, latitude: 60.0 }
+//! ];
+//! let ff = FortFormat::parse("(4f6.1)").unwrap();
+//! let fields = ["latitude", "longitude", "latitude", "longitude"];
+//! let s = to_string_with_fields(value, &ff, &fields).unwrap();
+//! 
+//! assert_eq!(s, "  -5.5   1.0  60.0 -45.0");
+//! ```
+//! 
+//! The reason is that the serializer internally tracks which fields it has written
+//! and always uses the next field with the correct name. So in this example the process
+//! is:
+//! 
+//! 1. Take the first element of `value`, it is a struct, so take the first field `longitude`.
+//! 2. We have not yet serialized any values, so our format and field indices both are 0.
+//! 3. Starting from `fields[0]` find the first index where our current struct field, "longitude",
+//!    is present. This is index 1, so serialize the value using the format spec at index 1 and hold
+//!    this in memory.
+//!    (If positional format specs like `1x` are present, they are ignored while counting the index.)
+//! 4. Repeat for the other field on our field element. 
+//! 5. The first struct is fully serialized, write the bytes in the proper order (latitude first, them
+//!    longitude.)
+//! 6. Since we serialized two fields, increment the field and format index by 2.
+//! 7. Take the second element of `value`, which is also a struct, and take its first field `longitude`.
+//! 8. Look for where "longitude" shows up in the list of `fields`, *starting from index 2*. This is at
+//!    index 3, so the longitude value will be serialized using the format at index 3 and written to the
+//!    corresponding position in the output.
+//! 
+//! At present, there is no way to tell it to "loop" the field names (i.e. you cannot pass just
+//! `["latitude", "longitude"]` for `fields` in the above example - it must have 4 elements matching
+//! 4 total fields).
+//! 
+//! # Strings and the format spec
+//! 
+//! The Fortran `CHARACTER` type is essentially an alias for `byte`, as Fortran was not
+//! designed with multi-byte characters in mind. Thus, the character format `aN` means
+//! that field can only hold *N* bytes, which may be fewer than *N* Unicode characters.
+//! If your output strings contain non-ASCII characters and are being unexpectedly truncated,
+//! this could be why.
+//! 
+//! # Enum variants and the format spec
+//! 
+//! Enum variants can be identified either by their name or index. This crate allows either,
+//! and will automatically select which one to use based on the format string:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string;
+//! #[derive(serde::Serialize)]
+//! enum Test {
+//!     Alpha,
+//!     Beta
+//! }
+//! 
+//! // If the format spec for the variant is an integer, then the
+//! // variant index will be written.
+//! let value = [Test::Alpha, Test::Beta];
+//! let ff1 = FortFormat::parse("(i1,1x,i1)").unwrap();
+//! let s1 = to_string(&value, &ff1).unwrap();
+//! assert_eq!(s1, "0 1");
+//! 
+//! // If the format spec for the variant is a character array,
+//! // then the format name is written instead.
+//! let ff2 = FortFormat::parse("(a5,1x,a5)").unwrap();
+//! let s2 = to_string(&value, &ff2).unwrap();
+//! assert_eq!(s2, "Alpha  Beta");
+//! ```
+//! 
+//! Variants containing values are also supported, but will run into the limits of Fortran
+//! formatted output. Given an enum whose variants both contain a similar type:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string;
+//! #[derive(serde::Serialize)]
+//! enum Test {
+//!     Alpha(i32),
+//!     Beta(u16)
+//! }
+//! 
+//! let value = [Test::Alpha(-99), Test::Beta(42)];
+//! let ff = FortFormat::parse("2(a5,1x,i4,1x)").unwrap();
+//! let s = to_string(&value, &ff).unwrap();
+//! assert_eq!(s, "Alpha  -99  Beta   42");
+//! ```
+//! 
+//! this will work for any value of `Test`, because both variants can be serialized as the
+//! variant name (or index) and an integer value. However, if you had an enum like:
+//! 
+//! ```no_run
+//! enum InstrumentValue {
+//!     Nothing,
+//!     Value(f32),
+//!     ValueWithError(f32, f32)
+//! }
+//! ```
+//! 
+//! it's clear that the different variants correspond to different formats, e.g.:
+//! 
+//! - `Nothing` = `(a14)`
+//! - `Value` = `(a14,f13.5)`
+//! - `ValueWithError` = `(a14,f13.5,f13.5)`
+//! 
+//! One way way around this would be to use the `into` attribute to tell serde
+//! to convert the enum into some type with a common representation
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string;
+//! #[derive(Debug, Clone, serde::Serialize)]
+//! #[serde(into = "(&'static str, f32, f32)")]
+//! enum InstrumentValue {
+//!     Nothing,
+//!     Value(f32),
+//!     ValueWithError(f32, f32)
+//! }
+//! 
+//! // Convert the enum into its name and two floats - even if the variant
+//! // doesn't have two floats. Use a fill value for the float(s) not present.
+//! impl From<InstrumentValue> for (&'static str, f32, f32) {
+//!     fn from(value: InstrumentValue) -> Self {
+//!         match value {
+//!             InstrumentValue::Nothing => ("Nothing", -999.0, -999.0),
+//!             InstrumentValue::Value(v) => ("Value", v, -999.0),
+//!             InstrumentValue::ValueWithError(v, e) => ("Val+Err", v, e),
+//!         }
+//!     }
+//! }
+//! 
+//! let values = [
+//!     InstrumentValue::Nothing,
+//!     InstrumentValue::Value(1.0),
+//!     InstrumentValue::ValueWithError(2.0, 0.2)
+//! ];
+//! 
+//! // Because we included the #[serde(into = "...")] attribute on the enum,
+//! // when serde goes to serialize it, it first gets converted to a string
+//! // and two floats, and those are serialized. This allows us to use
+//! // (a7,f8.3,f8.3) for any variant.
+//! let ff = FortFormat::parse("(3(a7,1x,f8.3,1x,f8.3,1x))").unwrap();
+//! let s = to_string(values, &ff).unwrap();
+//! 
+//! assert_eq!(s, "Nothing -999.000 -999.000   Value    1.000 -999.000 Val+Err    2.000    0.200");
+//! ```
+//! 
+//! If you need to be able to deserialize such a value, you would probably also want to include the
+//! `#[serde(try_from = "...")]` attribute.
+//! 
+//! ## Enum representations
+//! 
+//! For now, the different representations of enums are partially supported, but will all return the
+//! same result. Using internal or adjacent tagging on types passed to one of the `*_with_fields` 
+//! functions will not correctly place the tag value in the correct place given the field names.
+//! That is, given the following example:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::{to_string,to_string_with_fields};
+//! #[derive(Debug, serde::Serialize)]
+//! #[serde(tag = "type")]
+//! enum Internal {
+//!     Alpha{value: i32},
+//!     Beta{value: i32},
+//! }
+//! 
+//! let in_vec = vec![Internal::Alpha{value: 12}, Internal::Beta{value: 24}];
+//! let in_ff = FortFormat::parse("(2(a6,i3))").unwrap();
+//! let in_s = to_string(&in_vec, &in_ff).unwrap();
+//! assert_eq!(in_s, " Alpha 12  Beta 24");
+//! 
+//! let fields = ["type", "value"];
+//! let ff = FortFormat::parse("(i2,1x,a5)").unwrap();
+//! let res = to_string_with_fields(
+//!     Internal::Alpha { value: 42 },
+//!     &ff,
+//!     &fields
+//! );
+//! assert!(res.is_err());
+//! ```
+//! 
+//! you will get an error because it still tries to serialize the variant first. This is not
+//! the desired behavior, and may be fixed in a future version.
 use std::{fmt::{Octal, UpperHex}, io::Write, rc::Rc, string::FromUtf8Error};
 
 use ryu_floating_decimal::d2d;
 use serde::ser;
 use crate::{de::FortFormat, format_specs::{FortField, IntBase, RealFmt}, serde_error::{SError, SResult}};
 
+/// Serialize a value into a string using the given Fortran format.
+/// 
+/// When serializing structures or maps using this function, the order of the fields
+/// or values is the order in which they will be serialized. This must match the order
+/// of the type specifications in the format. Note that because most map types do not
+/// provide a consistent order, it is therefore not recommended to use this function
+/// when serializing a map or anything containing a map. Use [`to_string_with_fields`]
+/// instead.
+/// 
+/// In addition to erroring if the serialization fails (see [`to_bytes`] for possible
+/// causes), this function will error in the unlikely case where the serialized bytes
+/// cannot be interpreted as valid UTF-8.
 pub fn to_string<T>(value: T, fmt: &FortFormat) -> SResult<String> 
 where T: ser::Serialize
 {
@@ -12,6 +470,15 @@ where T: ser::Serialize
     Ok(serializer.try_into_string()?)
 }
 
+/// Serialize a value into a string using the given Fortran format and a list of field names.
+/// 
+/// When serializing a structure or map, the fields/values will be written out in the order
+/// that their names appear in `fields`. (For maps with non-string keys, the serialized version
+/// of each key is matched against `fields`.) See the module-level documentation for how this
+/// works when a struct/map is part of a tuple.
+/// 
+/// Like [`to_string`], this will return an error if serialization fails or if the resulting
+/// bytes cannot be converted to UTF-8.
 pub fn to_string_with_fields<T>(value: T, fmt: &FortFormat, fields: &[&str]) -> SResult<String> 
     where T: ser::Serialize
     {
@@ -20,6 +487,21 @@ pub fn to_string_with_fields<T>(value: T, fmt: &FortFormat, fields: &[&str]) -> 
         Ok(serializer.try_into_string()?)
     }
 
+/// Serialize a value into a sequence of bytes using the given Fortran format.
+/// 
+/// This is the same as [`to_string`], except the resulting bytes are directly
+/// returned, rather than being converted to UTF-8 first. If you don't need
+/// a string, this avoids the possible error from non-UTF8 bytes.
+/// 
+/// This function will return an error if serialization fails. Some common reasons
+/// for this are:
+/// 
+/// - The next Rust type does not match the next Fortran type in the format spec.
+/// - The type `T` has nested structures (a struct with another struct or map as a field)
+///   and does not use the `#[serde(flatten)]` attribute on the nested struct or map.
+/// - The format spec is too short, and ends before the values to be serialized do.
+/// 
+/// These cases are represented by the variants of [`SError`].
 pub fn to_bytes<T>(value: T, fmt: &FortFormat) -> SResult<Vec<u8>> 
 where T: ser::Serialize    
 {
@@ -28,13 +510,64 @@ where T: ser::Serialize
     Ok(serializer.into_bytes())
 }
 
+/// Serialize a value into a sequence of bytes using the given Fortran format and a list of field names.
+/// 
+/// This works identically to [`to_string_with_fields`] except the serialized bytes are returned directly,
+/// rather than being converted to a UTF-8 string.
+/// 
+/// An additional reason compared to [`to_bytes`] that this function might error is if the list of field
+/// names is shorter than the number of concrete values to serialize.
 pub fn to_bytes_with_fields<T>(value: T, fmt: &FortFormat, fields: &[&str]) -> SResult<Vec<u8>> 
-    where T: ser::Serialize    
-    {
-        let mut serializer = Serializer::new_with_fields(fmt, fields);
-        value.serialize(&mut serializer)?;
-        Ok(serializer.into_bytes())
-    }
+where T: ser::Serialize    
+{
+    let mut serializer = Serializer::new_with_fields(fmt, fields);
+    value.serialize(&mut serializer)?;
+    Ok(serializer.into_bytes())
+}
+
+/// Serialize a value directly to a writer using the given Fortran format.
+/// 
+/// This is a more convenient way to write to e.g. a file than using [`to_bytes`]
+/// to get the byte array first, and writing that. Other than requiring an
+/// object that implements [`std::io::Write`] to be passed in, this is otherwise
+/// identical to [`to_bytes`].
+/// 
+/// In addition to possible serialization errors, this will return an error if
+/// writing fails.
+/// 
+/// # Notes:
+/// 
+/// 1. It is *strongly* encouraged to use some form of buffered writer
+///    for `writer`, as the serializer often writes single bytes due to the
+///    need to match Fortran-style numbers. Without buffering, this could result
+///    in very slow output.
+/// 2. Often in Fortran a format spec will represent one data record and there
+///    will be one data record per line. This method does *not* automatically
+///    add a newline at the end of a record; you will need to do so by calling
+///    `writer.write(b"\n")` or something equivalent.
+pub fn to_writer<T, W>(value: T, fmt: &FortFormat, writer: W) -> SResult<()> 
+where
+    T: ser::Serialize,
+    W: Write
+{
+    let mut serializer = Serializer::new_writer(fmt, writer);
+    value.serialize(&mut serializer)?;
+    Ok(())
+}
+
+/// Serialize a value directly to a writer using the given Fortran format and a list of field names.
+/// 
+/// This is the equivalent of [`to_bytes_with_fields`] but writes directly to something
+/// implementing [`std::io::Write`]. The same notes given for [`to_writer`] apply.
+pub fn to_writer_with_fields<T, W>(value: T, fmt: &FortFormat, fields: &[&str], writer: W) -> SResult<()> 
+where
+    T: ser::Serialize,
+    W: Write
+{
+    let mut serializer = Serializer::new_writer_with_fields(fmt, fields, writer);
+    value.serialize(&mut serializer)?;
+    Ok(())
+}
 
 #[derive(Debug, Default)]
 struct MapSerHelper {
@@ -465,6 +998,7 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
         // Consider this behavior subject to change, but it seems that the most sensible
         // way to serialize a variant is to put the index/variant in the first field and
         // the value in the second.
+        dbg!((name, variant_index, variant));
         self.serialize_unit_variant(name, variant_index, variant)?;
         value.serialize(self)
     }
@@ -487,11 +1021,12 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
 
     fn serialize_tuple_variant(
         self,
-        _name: &'static str,
-        _variant_index: u32,
-        _variant: &'static str,
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
+        self.serialize_unit_variant(name, variant_index, variant)?;
         Ok(self)
     }
 
@@ -515,14 +1050,16 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
 
     fn serialize_struct_variant(
         self,
-        _name: &'static str,
-        _variant_index: u32,
-        _variant: &'static str,
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
         if self.map_helper.in_use {
             unimplemented!("Can't yet recursively call serialize_map - the map_helper must be reset before the next call")
         }
+        dbg!((name, variant_index, variant));
+        self.serialize_unit_variant(name, variant_index, variant)?;
         Ok(self)
     }
 }
@@ -1248,5 +1785,103 @@ mod tests {
         // this gives a "missing field 'inner' error", which is what we expected for now.
         let e = to_string_with_fields(value, &fmt, &["c", "b", "a", "db_id"]);
         assert!(e.is_err());
+    }
+
+    #[test]
+    fn test_external_enums() {
+        #[derive(Debug, serde::Serialize)]
+        enum External {
+            Alpha(i32),
+            Beta(i32),
+        }
+
+        let ex_vec = vec![External::Alpha(12), External::Beta(24)];
+        let ex_ff = FortFormat::parse("(2(a6,i3))").unwrap();
+        let ex_s = to_string(&ex_vec, &ex_ff).unwrap();
+        assert_eq!(ex_s, " Alpha 12  Beta 24");        
+    }
+
+    #[test]
+    fn test_internal_enums() {
+        #[derive(Debug, serde::Serialize)]
+        #[serde(tag = "type")]
+        enum Internal {
+            Alpha{value: i32},
+            Beta{value: i32},
+        }
+
+        let in_vec = vec![Internal::Alpha{value: 12}, Internal::Beta{value: 24}];
+        let in_ff = FortFormat::parse("(2(a6,i3))").unwrap();
+        let in_s = to_string(&in_vec, &in_ff).unwrap();
+        assert_eq!(in_s, " Alpha 12  Beta 24");
+
+        let fields = ["type", "value"];
+        let ff = FortFormat::parse("(a5,1x,i2)").unwrap();
+        let s = to_string_with_fields(
+            Internal::Alpha { value: 42 },
+            &ff,
+            &fields
+        ).unwrap();
+        assert_eq!(s, "42 Alpha");
+    }
+
+    #[test]
+    fn test_adjacent_enums() {
+        #[derive(Debug, serde::Serialize)]
+        #[serde(tag = "key", content = "value")]
+        enum Adjacent {
+            Alpha(i32),
+            Beta(i32),
+        }
+
+        let adj_vec = vec![Adjacent::Alpha(12), Adjacent::Beta(24)];
+        let adj_ff = FortFormat::parse("(2(a6,i3))").unwrap();
+        let adj_s = to_string(&adj_vec, &adj_ff).unwrap();
+        assert_eq!(adj_s, " Alpha 12  Beta 24");
+    }
+
+    #[test]
+    fn test_untagged_enums() {
+        #[derive(Debug, serde::Serialize)]
+        #[serde(untagged)]
+        enum Untagged {
+            Alpha(i32),
+            Beta(f32),
+        }
+
+        let un_vec = vec![Untagged::Alpha(12), Untagged::Beta(24.0)];
+        let un_ff = FortFormat::parse("(i3,f6.1)").unwrap();
+        let un_s = to_string(&un_vec, &un_ff).unwrap();
+        assert_eq!(un_s, " 12  24.0");
+    }
+
+    #[test]
+    fn test_enum_into() {
+        #[derive(Debug, Clone, serde::Serialize)]
+        #[serde(into = "String")]
+        enum InstrumentValue {
+            Nothing,
+            Value(f32),
+            ValueWithError(f32, f32)
+        }
+        
+        impl From<InstrumentValue> for String {
+            fn from(value: InstrumentValue) -> Self {
+                match value {
+                    InstrumentValue::Nothing => "Nothing".to_string(),
+                    InstrumentValue::Value(v) => format!("{v:.3}"),
+                    InstrumentValue::ValueWithError(v, e) => format!("{v:.1}+/-{e:.1}"),
+                }
+            }
+        }
+
+        let values = [
+            InstrumentValue::Nothing,
+            InstrumentValue::Value(1.0),
+            InstrumentValue::ValueWithError(2.0, 0.2)
+        ];
+        let ff = FortFormat::parse("(3a12)").unwrap();
+        let s = to_string(values, &ff).unwrap();
+        assert_eq!(s, "     Nothing       1.000   2.0+/-0.2");
     }
 }

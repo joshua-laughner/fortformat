@@ -8,13 +8,13 @@
 //! let ff = FortFormat::parse("(a4,1x,i5.2)").unwrap();
 //! ```
 //! 
-//! From there, this can be used for [deserialization](crate::de) or you can inspect
+//! From there, this can be used for [deserialization](crate::de) or 
+//! [serialization](crate::ser), or you can inspect
 //! the fields directly with the `into_fields`, `iter_fields`, and `iter_non_skip_fields`
 //! methods on [`FortFormat`].
 use std::fmt::Display;
 
 use pest::{Parser, iterators::Pair, RuleType};
-use serde::Serialize;
 
 type PResult<T> = std::result::Result<T, PError>;
 

@@ -31,7 +31,7 @@
 //! the data:
 //! 
 //! ```
-//! use fortformat::serde_error::SResult;
+//! use fortformat::serde_error::DResult;
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::de::from_str;
 //! # 
@@ -42,7 +42,7 @@
 //! #     weight: f32,
 //! # }
 //! let ff = FortFormat::parse("(f8.1,i3,1x,a10)").unwrap();
-//! let res: SResult<Person> = from_str("   180.5 30 John Doe  ", &ff);
+//! let res: DResult<Person> = from_str("   180.5 30 John Doe  ", &ff);
 //! assert!(res.is_err())
 //! ```
 //! 
@@ -345,6 +345,7 @@ impl<'de> Deserializer<'de> {
         let n: usize = n.try_into().expect("Could not fit u32 into usize");
         let mut nbytes = 0;
         let mut i = 0;
+        // TODO: this should count bytes, not chars
         for c in self.input[self.input_idx..].chars() {
             i += 1;
             nbytes += c.len_utf8();
