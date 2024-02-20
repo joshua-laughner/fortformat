@@ -31,7 +31,7 @@
 //! the data:
 //! 
 //! ```
-//! use fortformat::serde_error::DResult;
+//! use fortformat::serde_common::DResult;
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::de::from_str;
 //! # 
@@ -51,7 +51,7 @@
 //! have that, you can do:
 //! 
 //! ```
-//! # use fortformat::serde_error::SResult;
+//! # use fortformat::serde_common::SResult;
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::de::from_str_with_fields;
 //! # 
@@ -168,7 +168,7 @@
 
 use serde::de::{self, SeqAccess, MapAccess, Visitor};
 use crate::fort_error::FError;
-use crate::serde_error::{DResult, DError};
+use crate::serde_common::{DResult, DError};
 use crate::format_specs::FortField;
 pub use crate::format_specs::{FortValue, FortFormat};
 use crate::parsing;

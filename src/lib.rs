@@ -129,7 +129,7 @@ pub mod fort_error;
 pub mod format_specs;
 pub(crate) mod parsing;
 #[cfg(feature = "serde")]
-pub mod serde_error;
+pub mod serde_common;
 #[cfg(feature = "serde")]
 pub mod de;
 #[cfg(feature = "serde")]
@@ -144,6 +144,6 @@ pub use de::{from_str, from_str_custom, from_str_with_fields, from_str_with_fiel
 #[cfg(feature = "serde")]
 pub use ser::{to_bytes, to_bytes_with_fields, to_string, to_string_with_fields, to_writer, to_writer_with_fields};
 #[cfg(feature = "serde")]
-pub use serde_error::{SError, DError};
+pub use serde_common::{SError, DError};
 #[cfg(feature = "dataframes")]
 pub use dataframes::read_to_dataframe;
