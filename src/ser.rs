@@ -4,11 +4,16 @@
 //! 
 //! This module expects that you have a Fortran format string, such as
 //! `(a10,i3,f8.2)` and want to serialize data according to that format. 
-//! The functions provided by this module belong to two groups: `to_*` and
-//! `to_*_with_fields`. The distinction mainly matters when serializing
-//! structures or maps. The `to_*` functions will output values in the order
-//! they are defined. That is, this example will work, because the fields in 
-//! `Person` are defined in the same order as they appear in the data:
+//! The functions provided by this module belong to three groups: `to_*`,
+//! `to_*_with_fields`, `to_*_custom`. The `to_*_custom` functions are the
+//! most flexible but the least convenient. You only need to use them if 
+//! the default [`SerSettings`] is not sufficient for your use case.
+//! 
+//! The distinction between the `to_*` and `to_*_with_fields` functions
+//! mainly matters when serializing structures or maps. The `to_*` functions 
+//! will output values in the order they are defined. That is, this example
+//! will work, because the fields in `Person` are defined in the same order 
+//! as they appear in the data:
 //! 
 //! ```
 //! use fortformat::format_specs::FortFormat;
@@ -444,11 +449,30 @@
 //! 
 //! you will get an error because it still tries to serialize the variant first. This is not
 //! the desired behavior, and may be fixed in a future version.
+//! 
+//! # None and unit types
+//! 
+//! Since Fortran does not have a good way to represent types containing no data, there was not an
+//! single, clear way to handle `None` values, the unit `()`, and unit structures (e.g. structures
+//! with no values inside them). Our current approach is to write all of these types as fill values.
+//! The logic was:
+//! 
+//! 1. Fill values are the closest thing to an "optional" type in Fortran, so are the least bad way
+//!    to communicate a `None` value.
+//! 2. Unit types still need a valid placeholder to fill their space in the text input/output, so
+//!    again a fill value is the least bad way to handle this.
+//! 
+//! The default "fill value" mimics Fortran's behavior when a value overflows its field width - 
+//! in such a case, the field is filled with `*`s. Since such a value is interpreted by Fortran
+//! as a non-number (for numeric fields), this is again the least-bad default in our opinion.
+//! You can change how fill values are generated using one of the `*_custom` methods with a
+//! [`SerSettings`] instance. Fill value format is defined by a [`NoneFill`] enum contained
+//! in [`SerSettings`]; see the [`NoneFill`] documentation for the available choices.
 use std::{fmt::{Octal, UpperHex}, io::Write, rc::Rc, string::FromUtf8Error};
 
 use ryu_floating_decimal::d2d;
 use serde::ser;
-use crate::{de::FortFormat, format_specs::{FortField, IntBase, RealFmt}, serde_common::{SError, SResult}};
+use crate::{de::FortFormat, format_specs::{FortField, IntBase, RealFmt}, serde_common::{NoneFill, SError, SResult}};
 
 /// Serialize a value into a string using the given Fortran format.
 /// 
@@ -480,12 +504,24 @@ where T: ser::Serialize
 /// Like [`to_string`], this will return an error if serialization fails or if the resulting
 /// bytes cannot be converted to UTF-8.
 pub fn to_string_with_fields<T>(value: T, fmt: &FortFormat, fields: &[&str]) -> SResult<String> 
-    where T: ser::Serialize
-    {
-        let mut serializer = Serializer::new_with_fields(fmt, fields);
-        value.serialize(&mut serializer)?;
-        Ok(serializer.try_into_string()?)
-    }
+where T: ser::Serialize
+{
+    let mut serializer = Serializer::new_with_fields(fmt, fields);
+    value.serialize(&mut serializer)?;
+    Ok(serializer.try_into_string()?)
+}
+
+/// Serialize a value into a string with full control over how the serialization is done.
+/// 
+/// Use this method if you need to pass custom settings. See [`SerSettings`] for available
+/// options. Pass `None` for `fields` if there are no field names to match up.
+pub fn to_string_custom<T>(value: T, fmt: &FortFormat, fields: Option<&[&str]>, settings: SerSettings) -> SResult<String> 
+where T: ser::Serialize
+{
+    let mut serializer = Serializer::new_custom(fmt, fields, settings);
+    value.serialize(&mut serializer)?;
+    Ok(serializer.try_into_string()?)
+}
 
 /// Serialize a value into a sequence of bytes using the given Fortran format.
 /// 
@@ -521,6 +557,18 @@ pub fn to_bytes_with_fields<T>(value: T, fmt: &FortFormat, fields: &[&str]) -> S
 where T: ser::Serialize    
 {
     let mut serializer = Serializer::new_with_fields(fmt, fields);
+    value.serialize(&mut serializer)?;
+    Ok(serializer.into_bytes())
+}
+
+/// Serialize a value into a sequence of bytes with full control over how the serialization is done.
+/// 
+/// Use this method if you need to pass custom settings. See [`SerSettings`] for available
+/// options. Pass `None` for `fields` if there are no field names to match up.
+pub fn to_bytes_custom<T>(value: T, fmt: &FortFormat, fields: Option<&[&str]>, settings: SerSettings) -> SResult<Vec<u8>> 
+where T: ser::Serialize    
+{
+    let mut serializer = Serializer::new_custom(fmt, fields, settings);
     value.serialize(&mut serializer)?;
     Ok(serializer.into_bytes())
 }
@@ -569,6 +617,51 @@ where
     Ok(())
 }
 
+/// Serialize a value directly to a writer with full control over how the serialization is done.
+/// 
+/// Use this method if you need to pass custom settings. See [`SerSettings`] for available
+/// options. Pass `None` for `fields` if there are no field names to match up.
+pub fn to_writer_custom<T, W>(value: T, fmt: &FortFormat, fields: Option<&[&str]>, settings: SerSettings, writer: W) -> SResult<()> 
+where
+    T: ser::Serialize,
+    W: Write
+{
+    let mut serializer = Serializer::new_writer_custom(fmt, fields, settings, writer);
+    value.serialize(&mut serializer)?;
+    Ok(())
+}
+
+/// Settings for serialization.
+/// 
+/// This can be used with the `*_custom` methods to change how the serialization
+/// behaves. To construct, call `SerSettings::default()` to build the default,
+/// then use the various methods to update the settings, e.g.:
+/// 
+/// ```
+/// # use fortformat::ser::SerSettings;
+/// # use fortformat::serde_common::NoneFill;
+/// let settings = SerSettings::default()
+///     .fill_method(NoneFill::new_string("N/A"));
+/// ```
+/// 
+/// Each of the methods' documentation describes the purpose of its setting
+/// and the default.
+#[derive(Debug, Default)]
+pub struct SerSettings {
+    fill_method: NoneFill,
+}
+
+impl SerSettings {
+    /// Sets how `None` values, the unit type, and unit structs are written.
+    /// 
+    /// The default is the default [`NoneFill`], which is to write an "*" for
+    /// the full width of the field.
+    pub fn fill_method(mut self, fill_method: NoneFill) -> Self {
+        self.fill_method = fill_method;
+        self
+    }
+}
+
 #[derive(Debug, Default)]
 struct MapSerHelper {
     next_field_index: Option<usize>,
@@ -595,15 +688,20 @@ struct Serializer<'f, W: Write> {
     fields: Option<&'f[ &'f str]>,
     field_idx: usize,
     map_helper: MapSerHelper,
+    settings: SerSettings,
 }
 
 impl<'f> Serializer<'f, Vec<u8>> {
     pub fn new(fmt: &'f FortFormat) -> Self {
-        Self { buf: vec![], fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default() }
+        Self { buf: vec![], fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
     }
 
     pub fn new_with_fields(fmt: &'f FortFormat, fields: &'f[&'f str]) -> Self {
-        Self { buf: vec![], fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default() }
+        Self { buf: vec![], fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
+    }
+
+    pub fn new_custom(fmt: &'f FortFormat, fields: Option<&'f[&'f str]>, settings: SerSettings) -> Self {
+        Self { buf: vec![], fmt, fmt_idx: 0, fields, field_idx: 0, map_helper: MapSerHelper::default(), settings }
     }
 
     pub fn into_bytes(self) -> Vec<u8> {
@@ -617,11 +715,15 @@ impl<'f> Serializer<'f, Vec<u8>> {
 
 impl <'f, W: Write> Serializer<'f, W> {
     pub fn new_writer(fmt: &'f FortFormat, writer: W) -> Self {
-        Self { buf: writer, fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default() }
+        Self { buf: writer, fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
     }
 
     pub fn new_writer_with_fields(fmt: &'f FortFormat, fields: &'f[&'f str], writer: W) -> Self {
-        Self { buf: writer, fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default() }
+        Self { buf: writer, fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
+    }
+
+    pub fn new_writer_custom(fmt: &'f FortFormat, fields: Option<&'f[&'f str]>, settings: SerSettings, writer: W) -> Self {
+        Self { buf: writer, fmt, fmt_idx: 0, fields: fields, field_idx: 0, map_helper: MapSerHelper::default(), settings }
     }
 }
 
@@ -731,17 +833,26 @@ impl<'f, W: Write + 'f> Serializer<'f, W> {
     /// # Panics
     /// Panics if the input slice does not have the number of bytes expected for the next format.
     /// It is the caller's responsibility to ensure that the correct number of bytes are provided.
-    fn write_next_entry_raw(&mut self, bytes: &[u8]) -> SResult<()> {
-        self.advance_over_skips()?;
-        let nbytes = match *self.next_fmt()? {
-            FortField::Char { width } => width.unwrap_or(1),
-            FortField::Logical { width } => width,
-            FortField::Integer { width, zeros: _, base: _ } => width,
-            FortField::Real { width, precision: _, fmt: _, scale: _ } => width,
+    fn write_next_entry_raw(&mut self, bytes: &[u8], fmt: Option<FortField>) -> SResult<()> {
+        let fmt = if let Some(fmt) = fmt {
+            fmt
+        } else {
+            self.advance_over_skips()?;
+            *self.next_fmt()?
+        };
+
+        let nbytes = match fmt {
+            FortField::Char { width } => width,
+            FortField::Logical { width } => Some(width),
+            FortField::Integer { width, zeros: _, base: _ } => Some(width),
+            FortField::Real { width, precision: _, fmt: _, scale: _ } => Some(width),
             FortField::Skip => panic!("Should not get a skip format, should have advanced over all skips"),
         };
-        if nbytes != bytes.len() as u32 {
-            panic!("Called write_next_entry_raw with a slice of {} bytes, expected a slice of {} bytes", bytes.len(), nbytes);
+
+        if let Some(n) = nbytes {
+            if n != bytes.len() as u32 {
+                panic!("Called write_next_entry_raw with a slice of {} bytes, expected a slice of {} bytes", bytes.len(), n);
+            }
         }
 
         self.buf.write(bytes)?;
@@ -817,7 +928,7 @@ impl<'f, W: Write + 'f> Serializer<'f, W> {
         if self.map_helper.next_field_index.is_some() {
             for maybe_bytes in self.map_helper.take_validate_data() {
                 if let Some(bytes) = maybe_bytes {
-                    self.write_next_entry_raw(&bytes)?;
+                    self.write_next_entry_raw(&bytes, None)?;
                 } else {
                     let field_name = self.curr_field().unwrap_or("?");
                     unimplemented!("The field {field_name} did not have a value, but a later field did. This is not handled yet.");
@@ -847,12 +958,7 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Logical { width } = next_fmt {
-            let b = if v { b"T" } else { b"F" };
-            for _ in 0..width-1 {
-                write!(&mut self.buf, " ")?;
-            }
-            self.buf.write(b)?;
-            Ok(())
+            serialize_logical(v, width, &mut self.buf)
         } else {
             Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "bool", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
@@ -917,29 +1023,16 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Char { width } = next_fmt {
-            if let Some(width) = width {
-                let w = width as usize;
-                if v.len() >= w {
-                    self.buf.write(&v[..w])?;
-                } else {
-                    for _ in 0..(w - v.len()) {
-                        self.buf.write(b" ")?;
-                    }
-                    self.buf.write(v)?;
-                }
-                Ok(())
-            } else {
-                // With no width specified, the full string is written out with its exact length.
-                self.buf.write(v)?;
-                Ok(())
-            }
+            serialize_characters(v, width, &mut self.buf)
         } else {
             Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char/str/bytes", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        let next_fmt = *self.next_fmt()?;
+        let fill_bytes = self.settings.fill_method.make_fill_bytes(&next_fmt)?;
+        self.write_next_entry_raw(&fill_bytes, Some(next_fmt))
     }
 
     fn serialize_some<T: ?Sized>(self, value: &T) -> Result<Self::Ok, Self::Error>
@@ -949,11 +1042,11 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        self.serialize_none()
     }
 
     fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        self.serialize_none()
     }
 
     fn serialize_unit_variant(
@@ -998,7 +1091,6 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
         // Consider this behavior subject to change, but it seems that the most sensible
         // way to serialize a variant is to put the index/variant in the first field and
         // the value in the second.
-        dbg!((name, variant_index, variant));
         self.serialize_unit_variant(name, variant_index, variant)?;
         value.serialize(self)
     }
@@ -1058,7 +1150,6 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
         if self.map_helper.in_use {
             unimplemented!("Can't yet recursively call serialize_map - the map_helper must be reset before the next call")
         }
-        dbg!((name, variant_index, variant));
         self.serialize_unit_variant(name, variant_index, variant)?;
         Ok(self)
     }
@@ -1221,7 +1312,35 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeStructVariant for &'a mut Serializer<'
     }
 }
 
-fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
+pub(crate) fn serialize_logical<W: Write>(v: bool, width: u32, mut buf: W) -> SResult<()> {
+    let b = if v { b"T" } else { b"F" };
+    for _ in 0..width-1 {
+        buf.write(b" ")?;
+    }
+    buf.write(b)?;
+    Ok(())
+}
+
+pub(crate) fn serialize_characters<W: Write>(v: &[u8], width: Option<u32>, mut buf: W) -> SResult<()> {
+    if let Some(width) = width {
+        let w = width as usize;
+        if v.len() >= w {
+            buf.write(&v[..w])?;
+        } else {
+            for _ in 0..(w - v.len()) {
+                buf.write(b" ")?;
+            }
+            buf.write(v)?;
+        }
+        Ok(())
+    } else {
+        // With no width specified, the full string is written out with its exact length.
+        buf.write(v)?;
+        Ok(())
+    }
+}
+
+pub(crate) fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
     width: u32,
     zeros: Option<u32>,
     base: IntBase,
@@ -1272,7 +1391,7 @@ fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
     Ok(())
 }
 
-fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32) -> SResult<()> {
+pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32) -> SResult<()> {
     let v_is_neg = v < 0.0;
     let v = d2d(v);
     let mut b = itoa::Buffer::new();
@@ -1353,7 +1472,7 @@ fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, sc
 }
 
 
-fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32, exp_ch: &str, n_exp_digits: Option<u32>) -> SResult<()> {
+pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32, exp_ch: &str, n_exp_digits: Option<u32>) -> SResult<()> {
     let v_is_neg = v < 0.0;
     let v = d2d(v);
     
@@ -1885,5 +2004,58 @@ mod tests {
         let ff = FortFormat::parse("(3a12)").unwrap();
         let s = to_string(values, &ff).unwrap();
         assert_eq!(s, "     Nothing       1.000   2.0+/-0.2");
+    }
+
+    #[test]
+    fn test_none_default_fill() {
+        let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
+        let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
+        let s = to_string(value, &fmt).unwrap();
+        assert_eq!(s, "* *** * ***** ********");
+    }
+
+    #[test]
+    fn test_none_string_fill() {
+        let settings = SerSettings { 
+            fill_method: NoneFill::String("FILL_VAL".as_bytes().to_vec())
+        };
+        let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
+        let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
+        let s = to_string_custom(value, &fmt, None, settings).unwrap();
+        assert_eq!(s, "F FIL F FILL_ FILL_VAL");
+    }
+
+    #[test]
+    fn test_none_partial_typed_fill() {
+        let settings = SerSettings { 
+            fill_method: NoneFill::new_partial_typed(-999, -999.999)
+        };
+        let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
+        let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
+        let s = to_string_custom(value, &fmt, None, settings).unwrap();
+        assert_eq!(s, "* *** *  -999 -999.999");
+    }
+
+    #[test]
+    fn test_none_typed_fill() {
+        let settings = SerSettings { 
+            fill_method: NoneFill::new_typed(false, -999, -999.999, "N/A")
+        };
+        let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
+        let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
+        let s = to_string_custom(value, &fmt, None, settings).unwrap();
+        assert_eq!(s, "N/A N/A F  -999 -999.999");
+    }
+
+    #[test]
+    fn test_unit_type_fills() {
+        // Since unit types are treated the same as `None` (at least as of 19 Feb 2024)
+        // we rely on the none tests to ensure that alternate fill settings work.
+        #[derive(serde::Serialize)]
+        struct Empty;
+        let fmt = FortFormat::parse("(i5,1x,f8.3)").unwrap();
+        let value = ((), Empty);
+        let s = to_string(value, &fmt).unwrap();
+        assert_eq!(s, "***** ********");
     }
 }

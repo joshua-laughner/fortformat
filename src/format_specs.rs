@@ -175,6 +175,16 @@ impl FortField {
         }
     }
 
+    pub fn width(&self) -> u32 {
+        match self {
+            FortField::Char { width } => width.unwrap_or(1),
+            FortField::Logical { width } => *width,
+            FortField::Integer { width, zeros, base } => *width,
+            FortField::Real { width, precision, fmt, scale } => *width,
+            FortField::Skip => 1,
+        }
+    }
+
     /// Return the [Polars DataType](polars::datatypes::DataType) that matches this field type.
     /// 
     /// Note that because integer format specs do not carry information about the number of bytes
