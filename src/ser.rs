@@ -576,9 +576,9 @@ where T: ser::Serialize
 /// Serialize a value directly to a writer using the given Fortran format.
 /// 
 /// This is a more convenient way to write to e.g. a file than using [`to_bytes`]
-/// to get the byte array first, and writing that. Other than requiring an
-/// object that implements [`std::io::Write`] to be passed in, this is otherwise
-/// identical to [`to_bytes`].
+/// to get the byte array first, and writing that. It will also automatically
+/// append a newline at the end of the record so that the writer is ready
+/// for the next record.
 /// 
 /// In addition to possible serialization errors, this will return an error if
 /// writing fails.
@@ -600,6 +600,7 @@ where
 {
     let mut serializer = Serializer::new_writer(fmt, writer);
     value.serialize(&mut serializer)?;
+    serializer.end_record()?;
     Ok(())
 }
 
@@ -614,13 +615,15 @@ where
 {
     let mut serializer = Serializer::new_writer_with_fields(fmt, fields, writer);
     value.serialize(&mut serializer)?;
+    serializer.end_record()?;
     Ok(())
 }
 
 /// Serialize a value directly to a writer with full control over how the serialization is done.
 /// 
 /// Use this method if you need to pass custom settings. See [`SerSettings`] for available
-/// options. Pass `None` for `fields` if there are no field names to match up.
+/// options. Pass `None` for `fields` if there are no field names to match up. You can
+/// change the newline written to the end of the recrod with the [`SerSettings`] instance.
 pub fn to_writer_custom<T, W>(value: T, fmt: &FortFormat, fields: Option<&[&str]>, settings: SerSettings, writer: W) -> SResult<()> 
 where
     T: ser::Serialize,
@@ -628,6 +631,31 @@ where
 {
     let mut serializer = Serializer::new_writer_custom(fmt, fields, settings, writer);
     value.serialize(&mut serializer)?;
+    serializer.end_record()?;
+    Ok(())
+}
+
+/// Write many sets of values with the same format, one per line.
+/// 
+/// This will use the format `fmt` to write each of the elements in `values`. 
+/// Each one will be separated by the newline character defined in `settings`,
+/// which by default is `\n`. 
+/// 
+/// If you have many values to write already collected in a sequence, this function
+/// should be more efficient than repeated calls to one of the `to_writer*` functions,
+/// as it won't have to rebuild the serializer for each line. However, if you only
+/// have a lazy iterator over your values, you will need to call one of the `to_writer*`
+/// functions for each element.
+pub fn many_to_writer_custom<T, W>(values: &[T], fmt: &FortFormat, fields: Option<&[&str]>, settings: SerSettings, writer: W) -> SResult<()> 
+where
+    T: ser::Serialize,
+    W: Write
+{
+    let mut serializer = Serializer::new_writer_custom(fmt, fields, settings, writer);
+    for val in values.iter() {
+        val.serialize(&mut serializer)?;
+        serializer.end_record()?;
+    }
     Ok(())
 }
 
@@ -646,9 +674,19 @@ where
 /// 
 /// Each of the methods' documentation describes the purpose of its setting
 /// and the default.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SerSettings {
     fill_method: NoneFill,
+    newline: &'static [u8],
+}
+
+impl Default for SerSettings {
+    fn default() -> Self {
+        Self { 
+            fill_method: Default::default(),
+            newline: b"\n"
+        }
+    }
 }
 
 impl SerSettings {
@@ -658,6 +696,19 @@ impl SerSettings {
     /// the full width of the field.
     pub fn fill_method(mut self, fill_method: NoneFill) -> Self {
         self.fill_method = fill_method;
+        self
+    }
+
+    /// Sets the bytes used to end a record and start a new line in a writer.
+    /// 
+    /// The default is `b"\n"`, i.e. a literal newline byte. This matches the Rust
+    /// convention of always using only a newline character, and never including a
+    /// carriage return. 
+    /// 
+    /// As a trick, you can pass an empty bytestring, `b""`, if you do not want
+    /// any new line bytes(s) automatically appended by one of the writer functions.
+    pub fn newline(mut self, newline: &'static [u8]) -> Self {
+        self.newline = newline;
         self
     }
 }
@@ -937,6 +988,13 @@ impl<'f, W: Write + 'f> Serializer<'f, W> {
         }
         Ok(())
         
+    }
+
+    fn end_record(&mut self) -> SResult<()> {
+        self.buf.write(self.settings.newline)?;
+        self.fmt_idx = 0;
+        self.field_idx = 0;
+        Ok(())
     }
 }
 
@@ -2016,9 +2074,9 @@ mod tests {
 
     #[test]
     fn test_none_string_fill() {
-        let settings = SerSettings { 
-            fill_method: NoneFill::String("FILL_VAL".as_bytes().to_vec())
-        };
+        let settings = SerSettings::default()
+            .fill_method(NoneFill::String("FILL_VAL".as_bytes().to_vec()));
+        
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
         let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
         let s = to_string_custom(value, &fmt, None, settings).unwrap();
@@ -2027,9 +2085,8 @@ mod tests {
 
     #[test]
     fn test_none_partial_typed_fill() {
-        let settings = SerSettings { 
-            fill_method: NoneFill::new_partial_typed(-999, -999.999)
-        };
+        let settings = SerSettings::default()
+            .fill_method(NoneFill::new_partial_typed(-999, -999.999));
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
         let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
         let s = to_string_custom(value, &fmt, None, settings).unwrap();
@@ -2038,9 +2095,8 @@ mod tests {
 
     #[test]
     fn test_none_typed_fill() {
-        let settings = SerSettings { 
-            fill_method: NoneFill::new_typed(false, -999, -999.999, "N/A")
-        };
+        let settings = SerSettings::default()
+            .fill_method(NoneFill::new_typed(false, -999, -999.999, "N/A"));
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
         let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
         let s = to_string_custom(value, &fmt, None, settings).unwrap();
@@ -2057,5 +2113,33 @@ mod tests {
         let value = ((), Empty);
         let s = to_string(value, &fmt).unwrap();
         assert_eq!(s, "***** ********");
+    }
+
+    #[test]
+    fn test_multi_rec_write() {
+        let values = [
+            ("pa", 45.945, -90.273),
+            ("db", -12.45, 130.93),
+            ("lh", -45.038, 169.684),
+        ];
+        let fmt = FortFormat::parse("(a2,1x,f7.3,1x,f8.3)").unwrap();
+        let mut buf = vec![];
+        many_to_writer_custom(&values, &fmt, None, SerSettings::default(), &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "pa  45.945  -90.273\ndb -12.450  130.930\nlh -45.038  169.684\n");
+    }
+
+    #[test]
+    fn test_multi_rec_struct_write() {
+        let values = [
+            Test { a: "alpha", b: 1, c: 100.0 },
+            Test { a: "beta", b: 2, c: 200.0 },
+            Test { a: "gamma", b: 3, c: 300.0 },
+        ];
+        let fmt = FortFormat::parse("(i1,1x,f5.1,1x,a5)").unwrap();
+        let mut buf = vec![];
+        many_to_writer_custom(&values, &fmt, Some(&["b", "c", "a"]), SerSettings::default(), &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "1 100.0 alpha\n2 200.0  beta\n3 300.0 gamma\n");
     }
 }
