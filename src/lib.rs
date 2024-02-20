@@ -70,12 +70,12 @@
 //! - `a` = string/character type. `a` by itself means a single character. Strings are indicated
 //!   by `aN`, e.g. `a5`, `a12`, or `a128`. The number gives the maximum number of characters in
 //!   the string.
-//! - `i` = integer type. Must have a width, that is, `i5` is valid but `i` alone is not. If a second
-//!   number is given, as in `i5.3`, the second number indicates how wide the integer must be. If the
-//!   integer has fewer digits than this, it is zero-padded. For example, `42` formatted as `i5.3` would
-//!   be written as "  042" - 5 total width, 3 digits required. Fortran does not distinguish between
+//! - `i`, `o`, and `z` = integer type. Must have a width, that is, `i5` is valid but `i` alone is not. 
+//!   If a second number is given, as in `i5.3`, the second number indicates how wide the integer must be. 
+//!   If the integer has fewer digits than this, it is zero-padded. For example, `42` formatted as `i5.3` 
+//!   would be written as "  042" - 5 total width, 3 digits required. Fortran does not distinguish between
 //!   signed and unsigned integers. A negative sign takes up one of the available characters given by the
-//!   width.
+//!   width. `o` and `z` write the integer in octal and hexademical, respectively.
 //! - `f`, `e`, `d`, and `g` = real/float type. Must have both a width and precision, i.e. `f8.3` is
 //!   valid, but neither `f8` nor `f` are. In these types, the number after the decimal (3 in `f8.3`)
 //!   indicates the number of digits written after the decimal place. `f` will always write out numbers
