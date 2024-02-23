@@ -283,7 +283,7 @@ impl<'de> Deserializer<'de> {
             match peeked_fmt {
                 Some(&FortField::Skip) => {
                     self.fmt_idx += 1;
-                    let _ = self.next_n_chars(1);
+                    let _ = self.next_n_bytes(1);
                 }
                 _ => return,
             }
@@ -341,18 +341,15 @@ impl<'de> Deserializer<'de> {
 
     }
 
-    fn next_n_chars(&mut self, n: u32) -> Result<&'de str, DError> {
+    fn next_n_bytes(&mut self, n: u32) -> Result<&'de str, DError> {
         let n: usize = n.try_into().expect("Could not fit u32 into usize");
         let mut nbytes = 0;
-        let mut i = 0;
-        // TODO: this should count bytes, not chars
         for c in self.input[self.input_idx..].chars() {
-            i += 1;
             nbytes += c.len_utf8();
-            if i == n { break; }
+            if nbytes >= n { break; }
         }
 
-        if i < n {
+        if nbytes < n {
             return Err(DError::InputEndedEarly)
         }
 
@@ -362,14 +359,12 @@ impl<'de> Deserializer<'de> {
     }
 
     #[allow(dead_code)] // keeping this function for now in case it is needed later
-    fn prev_n_chars(&mut self, n: u32) {
+    fn prev_n_bytes(&mut self, n: u32) {
         let n: usize = n.try_into().expect("Could not fit u32 into usize");
         let mut nbytes = 0;
-        let mut i = 0;
         for c in self.input[..self.input_idx].chars().rev() {
-            i += 1;
             nbytes += c.len_utf8();
-            if i == n { break; }
+            if nbytes >= n { break; }
         }
 
         self.input_idx -= nbytes;
@@ -399,7 +394,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: de::Visitor<'de> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Logical { width } = next_fmt {
-            let substr = self.next_n_chars(width)?;
+            let substr = self.next_n_bytes(width)?;
             let b = parsing::parse_logical(substr)?;
             visitor.visit_bool(b)
         } else {
@@ -433,7 +428,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: de::Visitor<'de> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Integer { width, zeros: _, base } = next_fmt {
-            let substr = self.next_n_chars(width)?;
+            let substr = self.next_n_bytes(width)?;
             let v = match base {
                 crate::format_specs::IntBase::Decimal => parsing::parse_integer(substr)?,
                 crate::format_specs::IntBase::Octal => todo!(),
@@ -471,7 +466,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: de::Visitor<'de> {
             let next_fmt = *self.next_fmt()?;
             if let FortField::Integer { width, zeros: _, base } = next_fmt {
-                let substr = self.next_n_chars(width)?;
+                let substr = self.next_n_bytes(width)?;
                 let v = match base {
                     crate::format_specs::IntBase::Decimal => parsing::parse_unsigned_integer(substr)?,
                     crate::format_specs::IntBase::Octal => todo!(),
@@ -496,7 +491,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Real { width, precision: _, fmt, scale } = next_fmt {
             // First handle initial parsing
-            let substr = self.next_n_chars(width)?;
+            let substr = self.next_n_bytes(width)?;
             let substr = substr.trim(); // Fortran format allows padding with spaces, but Rust does not
             let res = if fmt.is_d() {
                 let valstr = substr.replace("d", "e").replace("D", "E");
@@ -525,7 +520,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         let next_fmt = *self.next_fmt()?;
         match next_fmt {
             FortField::Char { width: None } | FortField::Char { width: Some(1) } => {
-                let c = self.next_n_chars(1)?
+                let c = self.next_n_bytes(1)?
                     .chars()
                     .next()
                     .unwrap();  // Ok to unwrap, next_n_chars returns an error if not enough characters available.
@@ -545,7 +540,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: de::Visitor<'de> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Char { width } = next_fmt {
-            let s = self.next_n_chars(width.unwrap_or(1))?;
+            let s = self.next_n_bytes(width.unwrap_or(1))?;
             if self.settings.trim_strings {
                 visitor.visit_borrowed_str(s.trim())
             } else {
