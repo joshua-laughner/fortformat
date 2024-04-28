@@ -224,7 +224,7 @@ where T: de::Deserialize<'a>
 pub fn from_str_custom<'a, T>(s: &'a str, fmt: &'a FortFormat, settings: DeSettings) -> DResult<T> 
 where T: de::Deserialize<'a>
 {
-    let mut deserializer = Deserializer::from_str(s, fmt, settings);
+    let mut deserializer: Deserializer<'_, &str> = Deserializer::from_str(s, fmt, settings);
     let t = T::deserialize(&mut deserializer)?;
     Ok(t)
 }
@@ -234,8 +234,9 @@ where T: de::Deserialize<'a>
 /// For structures, the field names given as `fields` will be used to match values
 /// with the correct fields in the structure, rather than relying on order. If field names
 /// are not available (and you must rely on the order in the data), see [`from_str`].
-pub fn from_str_with_fields<'a, T>(s: &'a str, fmt: &'a FortFormat, fields: &'a[&'a str]) -> DResult<T> 
-where T: de::Deserialize<'a>
+pub fn from_str_with_fields<'a, T, F>(s: &'a str, fmt: &'a FortFormat, fields: &'a[F]) -> DResult<T> 
+where T: de::Deserialize<'a>,
+      F: AsRef<str>
 {
     from_str_with_fields_custom(s, fmt, fields, DeSettings::default())
 }
@@ -245,8 +246,9 @@ where T: de::Deserialize<'a>
 /// For structures, the field names given as `fields` will be used to match values
 /// with the correct fields in the structure, rather than relying on order. If field names
 /// are not available (and you must rely on the order in the data), see [`from_str_custom`].
-pub fn from_str_with_fields_custom<'a, T>(s: &'a str, fmt: &'a FortFormat, fields: &'a[&'a str], settings: DeSettings) -> DResult<T> 
-where T: de::Deserialize<'a>
+pub fn from_str_with_fields_custom<'a, T, F>(s: &'a str, fmt: &'a FortFormat, fields: &'a[F], settings: DeSettings) -> DResult<T> 
+where T: de::Deserialize<'a>,
+      F: AsRef<str>
 {
     let mut deserializer = Deserializer::from_str_with_fields(s, fmt, fields, settings);
     let t = T::deserialize(&mut deserializer)?;
@@ -254,23 +256,23 @@ where T: de::Deserialize<'a>
 }
 
 /// Deserializer for Fortran-formatted data.
-pub struct Deserializer<'de> {
+pub struct Deserializer<'de, F: AsRef<str>> {
     settings: DeSettings,
     input: &'de str,
     input_idx: usize,
     fmt: &'de FortFormat,
     fmt_idx: usize,
     field_idx: usize,
-    fields: Option<&'de [&'de str]>,
+    fields: Option<&'de [F]>,
 }
 
 
-impl<'de> Deserializer<'de> {
+impl<'de, F: AsRef<str>> Deserializer<'de, F> {
     pub fn from_str(input: &'de str, fmt: &'de FortFormat, settings: DeSettings) -> Self {
         Self { settings, input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: None }
     }
 
-    pub fn from_str_with_fields(input: &'de str, fmt: &'de FortFormat, fields: &'de[&'de str], settings: DeSettings) -> Self {
+    pub fn from_str_with_fields(input: &'de str, fmt: &'de FortFormat, fields: &'de[F], settings: DeSettings) -> Self {
         Self { settings, input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: Some(fields) }
     }
 
@@ -307,7 +309,7 @@ impl<'de> Deserializer<'de> {
 
     fn curr_field(&self) -> Option<&str> {
         if let Some(fields) = self.fields {
-            fields.get(self.field_idx).map(|f| *f)
+            fields.get(self.field_idx).map(|f| f.as_ref())
         } else {
             panic!("Called next_field on a deserializer without fields")
         }
@@ -320,7 +322,7 @@ impl<'de> Deserializer<'de> {
 
         self.fields.map(|f| f.get(self.field_idx - 1))
             .flatten()
-            .map(|f| *f)
+            .map(|f| f.as_ref())
     }
 
     #[allow(dead_code)] // keeping this function for now in case it is needed later
@@ -371,7 +373,7 @@ impl<'de> Deserializer<'de> {
     }
 }
 
-impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
+impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de, F> {
     type Error = DError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -677,9 +679,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         // string in the format.
         if let Some(fields) = self.fields {
             let this_field = fields.get(self.field_idx)
-                .map(|f| *f)
+                .map(|f| f)
                 .ok_or_else(|| DError::FieldListTooShort)?;
-            visitor.visit_borrowed_str(this_field)
+            visitor.visit_borrowed_str(this_field.as_ref())
         } else {
             // Note: as of 2023-10-20, this else clause isn't supporting a specific data
             // layout, it is just to handle the no-fields case.
@@ -698,19 +700,19 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 }
 
 
-struct KnownLenSeq<'a, 'de: 'a> {
-    de: &'a mut Deserializer<'de>,
+struct KnownLenSeq<'a, 'de: 'a, F: AsRef<str>> {
+    de: &'a mut Deserializer<'de, F>,
     n: usize,
     i: usize,
 }
 
-impl<'a, 'de> KnownLenSeq<'a, 'de> {
-    fn new(de: &'a mut Deserializer<'de>, n: usize) -> Self {
+impl<'a, 'de, F: AsRef<str>> KnownLenSeq<'a, 'de, F> {
+    fn new(de: &'a mut Deserializer<'de, F>, n: usize) -> Self {
         Self { de, n, i: 0 }
     }
 }
 
-impl<'de, 'a> SeqAccess<'de> for KnownLenSeq<'a, 'de> {
+impl<'de, 'a, F: AsRef<str>> SeqAccess<'de> for KnownLenSeq<'a, 'de, F> {
     type Error = DError;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
@@ -730,19 +732,19 @@ impl<'de, 'a> SeqAccess<'de> for KnownLenSeq<'a, 'de> {
 }
 
 
-struct UnknownLenSeq<'a, 'de: 'a> {
-    de: &'a mut Deserializer<'de>,
+struct UnknownLenSeq<'a, 'de: 'a, F: AsRef<str>> {
+    de: &'a mut Deserializer<'de, F>,
     n: usize,
     max_n: Option<usize>
 }
 
-impl<'a, 'de> UnknownLenSeq<'a, 'de> {
-    fn new(de: &'a mut Deserializer<'de>, max_n: Option<usize>) -> Self {
+impl<'a, 'de, F: AsRef<str>> UnknownLenSeq<'a, 'de, F> {
+    fn new(de: &'a mut Deserializer<'de, F>, max_n: Option<usize>) -> Self {
         Self { de, n: 0, max_n }
     }
 }
 
-impl<'de, 'a> SeqAccess<'de> for UnknownLenSeq<'a, 'de> {
+impl<'de, 'a, F: AsRef<str>> SeqAccess<'de> for UnknownLenSeq<'a, 'de, F> {
     type Error = DError;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
@@ -772,17 +774,17 @@ impl<'de, 'a> SeqAccess<'de> for UnknownLenSeq<'a, 'de> {
     }
 }
 
-struct FieldSequence<'a, 'de: 'a> {
-    de: &'a mut Deserializer<'de>,
+struct FieldSequence<'a, 'de: 'a, F: AsRef<str>> {
+    de: &'a mut Deserializer<'de, F>,
 }
 
-impl<'a, 'de> FieldSequence<'a, 'de> {
-    fn new(de: &'a mut Deserializer<'de>) -> Self {
+impl<'a, 'de, F: AsRef<str>> FieldSequence<'a, 'de, F> {
+    fn new(de: &'a mut Deserializer<'de, F>) -> Self {
         Self { de }
     }
 }
 
-impl<'a, 'de> MapAccess<'de> for FieldSequence<'a, 'de> {
+impl<'a, 'de, F: AsRef<str>> MapAccess<'de> for FieldSequence<'a, 'de, F> {
     type Error = DError;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
