@@ -553,7 +553,7 @@ where T: ser::Serialize
 /// 
 /// An additional reason compared to [`to_bytes`] that this function might error is if the list of field
 /// names is shorter than the number of concrete values to serialize.
-pub fn to_bytes_with_fields<T>(value: T, fmt: &FortFormat, fields: &[&str]) -> SResult<Vec<u8>> 
+pub fn to_bytes_with_fields<T, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: &[F]) -> SResult<Vec<u8>> 
 where T: ser::Serialize    
 {
     let mut serializer = Serializer::new_with_fields(fmt, fields);
@@ -565,7 +565,7 @@ where T: ser::Serialize
 /// 
 /// Use this method if you need to pass custom settings. See [`SerSettings`] for available
 /// options. Pass `None` for `fields` if there are no field names to match up.
-pub fn to_bytes_custom<T>(value: T, fmt: &FortFormat, fields: Option<&[&str]>, settings: SerSettings) -> SResult<Vec<u8>> 
+pub fn to_bytes_custom<T, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings) -> SResult<Vec<u8>> 
 where T: ser::Serialize    
 {
     let mut serializer = Serializer::new_custom(fmt, fields, settings);
@@ -608,7 +608,7 @@ where
 /// 
 /// This is the equivalent of [`to_bytes_with_fields`] but writes directly to something
 /// implementing [`std::io::Write`]. The same notes given for [`to_writer`] apply.
-pub fn to_writer_with_fields<T, W>(value: T, fmt: &FortFormat, fields: &[&str], writer: W) -> SResult<()> 
+pub fn to_writer_with_fields<T, W, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: &[F], writer: W) -> SResult<()> 
 where
     T: ser::Serialize,
     W: Write
@@ -624,7 +624,7 @@ where
 /// Use this method if you need to pass custom settings. See [`SerSettings`] for available
 /// options. Pass `None` for `fields` if there are no field names to match up. You can
 /// change the newline written to the end of the recrod with the [`SerSettings`] instance.
-pub fn to_writer_custom<T, W>(value: T, fmt: &FortFormat, fields: Option<&[&str]>, settings: SerSettings, writer: W) -> SResult<()> 
+pub fn to_writer_custom<T, W, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings, writer: W) -> SResult<()> 
 where
     T: ser::Serialize,
     W: Write
@@ -646,10 +646,11 @@ where
 /// as it won't have to rebuild the serializer for each line. However, if you only
 /// have a lazy iterator over your values, you will need to call one of the `to_writer*`
 /// functions for each element.
-pub fn many_to_writer_custom<T, W>(values: &[T], fmt: &FortFormat, fields: Option<&[&str]>, settings: SerSettings, writer: W) -> SResult<()> 
+pub fn many_to_writer_custom<T, W, F>(values: &[T], fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings, writer: W) -> SResult<()> 
 where
     T: ser::Serialize,
-    W: Write
+    W: Write,
+    F: AsRef<str>
 {
     let mut serializer = Serializer::new_writer_custom(fmt, fields, settings, writer);
     for val in values.iter() {
@@ -2124,7 +2125,7 @@ mod tests {
         ];
         let fmt = FortFormat::parse("(a2,1x,f7.3,1x,f8.3)").unwrap();
         let mut buf = vec![];
-        many_to_writer_custom(&values, &fmt, None, SerSettings::default(), &mut buf).unwrap();
+        many_to_writer_custom::<_, _, &str>(&values, &fmt, None, SerSettings::default(), &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s, "pa  45.945  -90.273\ndb -12.450  130.930\nlh -45.038  169.684\n");
     }
