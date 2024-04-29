@@ -229,10 +229,10 @@ impl NoneFill {
         Self::Typed { logical, int, real, string }
     }
 
-    pub(crate) fn make_fill_bytes(&self, fmt: &FortField) -> SResult<Vec<u8>> {
+    pub(crate) fn make_fill_bytes(&self, fmt: &FortField, left_align_str: bool) -> SResult<Vec<u8>> {
         match self {
             NoneFill::RepChar(byte) => Ok(Self::_fill_bytes_rep_char(*byte, fmt.width())),
-            NoneFill::String(bytes) => Self::_file_bytes_string(bytes, Some(fmt.width())),
+            NoneFill::String(bytes) => Self::_file_bytes_string(bytes, Some(fmt.width()), left_align_str),
             NoneFill::PartialTyped { int, real, fill_byte } => {
                 match fmt {
                     FortField::Char { width } => Ok(Self::_fill_bytes_rep_char(*fill_byte, width.unwrap_or(1))),
@@ -247,7 +247,7 @@ impl NoneFill {
             },
             NoneFill::Typed { logical, int, real, string } => {
                 match fmt {
-                    FortField::Char { width } => Self::_file_bytes_string(&string, *width),
+                    FortField::Char { width } => Self::_file_bytes_string(&string, *width, left_align_str),
                     FortField::Logical { width } => Self::_fill_bytes_logical(*logical, *width),
                     FortField::Integer { width, zeros, base } => Self::_fill_bytes_int(*int, *width, *zeros, *base),
                     FortField::Real { width, precision, fmt, scale } => {
@@ -264,9 +264,9 @@ impl NoneFill {
         std::iter::repeat(byte).take(width as usize).collect()
     }
 
-    fn _file_bytes_string(bytes: &[u8], width: Option<u32>) -> SResult<Vec<u8>> {
+    fn _file_bytes_string(bytes: &[u8], width: Option<u32>, left_aligned: bool) -> SResult<Vec<u8>> {
         let mut buf = vec![];
-        serialize_characters(bytes, width, &mut buf)?;
+        serialize_characters(bytes, width, &mut buf, left_aligned)?;
         Ok(buf)
     }
 

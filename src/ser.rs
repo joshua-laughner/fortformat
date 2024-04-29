@@ -514,7 +514,9 @@ where T: ser::Serialize, F: AsRef<str>
 /// Serialize a value into a string with full control over how the serialization is done.
 /// 
 /// Use this method if you need to pass custom settings. See [`SerSettings`] for available
-/// options. Pass `None` for `fields` if there are no field names to match up.
+/// options. Pass `None` for `fields` if there are no field names to match up. Note that
+/// calling without fields will require annotating the type F for the fields, so you would
+/// call this as `to_string_custom::<_, &str>(...)` in that case.
 pub fn to_string_custom<T, F>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings) -> SResult<String> 
 where T: ser::Serialize, F: AsRef<str>
 {
@@ -564,7 +566,9 @@ where T: ser::Serialize
 /// Serialize a value into a sequence of bytes with full control over how the serialization is done.
 /// 
 /// Use this method if you need to pass custom settings. See [`SerSettings`] for available
-/// options. Pass `None` for `fields` if there are no field names to match up.
+/// options. Pass `None` for `fields` if there are no field names to match up.  Note that
+/// calling without fields will require annotating the type F for the fields, so you would
+/// call this as `to_string_custom::<_, &str>(...)` in that case.
 pub fn to_bytes_custom<T, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings) -> SResult<Vec<u8>> 
 where T: ser::Serialize    
 {
@@ -622,8 +626,10 @@ where
 /// Serialize a value directly to a writer with full control over how the serialization is done.
 /// 
 /// Use this method if you need to pass custom settings. See [`SerSettings`] for available
-/// options. Pass `None` for `fields` if there are no field names to match up. You can
-/// change the newline written to the end of the recrod with the [`SerSettings`] instance.
+/// options. Pass `None` for `fields` if there are no field names to match up.  Note that
+/// calling without fields will require annotating the type F for the fields, so you would
+/// call this as `to_string_custom::<_, &str>(...)` in that case. You can change the newline
+/// written to the end of the recrod with the [`SerSettings`] instance. 
 pub fn to_writer_custom<T, W, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings, writer: W) -> SResult<()> 
 where
     T: ser::Serialize,
@@ -679,13 +685,15 @@ where
 pub struct SerSettings {
     fill_method: NoneFill,
     newline: &'static [u8],
+    align_left_str: bool,
 }
 
 impl Default for SerSettings {
     fn default() -> Self {
         Self { 
             fill_method: Default::default(),
-            newline: b"\n"
+            newline: b"\n",
+            align_left_str: false
         }
     }
 }
@@ -710,6 +718,20 @@ impl SerSettings {
     /// any new line bytes(s) automatically appended by one of the writer functions.
     pub fn newline(mut self, newline: &'static [u8]) -> Self {
         self.newline = newline;
+        self
+    }
+
+    /// Strings will be serialized aligned to the left of the field.
+    /// 
+    /// This is not standard Fortran behavior, which always aligns right.
+    /// However, since Fortran character arrays are always fixed width, you
+    /// often get the effect that they are left justified, and setting this
+    /// to `true` mimics that. 
+    /// 
+    /// TODO: provide a "serialize_with" function that pads strings with
+    /// spaces to a given width.
+    pub fn align_left_str(mut self, align_left: bool) -> Self {
+        self.align_left_str = align_left;
         self
     }
 }
@@ -1082,7 +1104,7 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::Serializer for &'a mut Serialize
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Char { width } = next_fmt {
-            serialize_characters(v, width, &mut self.buf)
+            serialize_characters(v, width, &mut self.buf, self.settings.align_left_str)
         } else {
             Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char/str/bytes", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
@@ -1090,7 +1112,7 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::Serializer for &'a mut Serialize
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
         let next_fmt = *self.next_fmt()?;
-        let fill_bytes = self.settings.fill_method.make_fill_bytes(&next_fmt)?;
+        let fill_bytes = self.settings.fill_method.make_fill_bytes(&next_fmt, self.settings.align_left_str)?;
         self.write_next_entry_raw(&fill_bytes, Some(next_fmt))
     }
 
@@ -1380,12 +1402,17 @@ pub(crate) fn serialize_logical<W: Write>(v: bool, width: u32, mut buf: W) -> SR
     Ok(())
 }
 
-pub(crate) fn serialize_characters<W: Write>(v: &[u8], width: Option<u32>, mut buf: W) -> SResult<()> {
+pub(crate) fn serialize_characters<W: Write>(v: &[u8], width: Option<u32>, mut buf: W, left_align: bool) -> SResult<()> {
     if let Some(width) = width {
         let w = width as usize;
         if v.len() >= w {
             buf.write(&v[..w])?;
-        } else {
+        } else if left_align {
+            buf.write(v)?;
+            for _ in 0..(w - v.len()) {
+                buf.write(b" ")?;
+            }
+        } else { 
             for _ in 0..(w - v.len()) {
                 buf.write(b" ")?;
             }
@@ -1452,7 +1479,12 @@ pub(crate) fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
 
 pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32) -> SResult<()> {
     let v_is_neg = v < 0.0;
-    let v = d2d(v);
+    // println!("v = {v}");
+    let v = if v == 0.0 {
+        ryu_floating_decimal::FloatingDecimal64{ mantissa: 0, exponent: 0 }
+    } else { 
+        d2d(v) 
+    };
     let mut b = itoa::Buffer::new();
     let s = b.format(v.mantissa);
     let m_bytes = s.as_bytes();
@@ -1777,6 +1809,10 @@ mod tests {
         assert_eq!(s, "abcde");
         let s = to_string("abcdefg", &fmt).unwrap();
         assert_eq!(s, "abcde");
+
+        let settings = SerSettings::default().align_left_str(true);
+        let s = to_string_custom::<_, &str>("abc", &fmt, None, settings).unwrap();
+        assert_eq!(s, "abc  ");
     }
 
     #[test]
