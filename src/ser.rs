@@ -468,7 +468,7 @@
 //! You can change how fill values are generated using one of the `*_custom` methods with a
 //! [`SerSettings`] instance. Fill value format is defined by a [`NoneFill`] enum contained
 //! in [`SerSettings`]; see the [`NoneFill`] documentation for the available choices.
-use std::{fmt::{Octal, UpperHex}, io::Write, rc::Rc, string::FromUtf8Error};
+use std::{fmt::{Octal, UpperHex}, io::Write, string::FromUtf8Error, sync::Arc};
 
 use ryu_floating_decimal::d2d;
 use serde::ser;
@@ -1304,7 +1304,7 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeMap for &'a mut Seriali
             // names
             let fmt = FortFormat::parse("(a512)").unwrap();
             let key_string = to_string(key, &fmt)
-                .map_err(|e| SError::KeyToFieldError(Rc::new(e)))?;
+                .map_err(|e| SError::KeyToFieldError(Arc::new(e)))?;
             self.serialize_key_helper(key_string.trim())
         } else {
             Ok(())

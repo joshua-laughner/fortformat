@@ -1,6 +1,6 @@
 //! Errors in serializing/deseralizing Fortran-formatted data
-use std::rc::Rc;
 use std::string::FromUtf8Error;
+use std::sync::Arc;
 use std::{fmt::Display, error::Error};
 use serde::{ser, de};
 use crate::format_specs::{FortField, IntBase, PError, RealFmt};
@@ -26,7 +26,7 @@ pub enum SError {
     /// Indicates that a format cannot be used for output
     InvalidOutputFmt(FortField, String),
     /// Indicates that an arbitrary key could not be converted to a string when matching up with fields
-    KeyToFieldError(Rc<Self>),
+    KeyToFieldError(Arc<Self>),
     /// Indicates that a field name/key could not be found in the list of fields
     FieldMissingError(String),
     /// Indicates a failure during serialization
