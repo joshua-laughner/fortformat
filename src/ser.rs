@@ -489,7 +489,7 @@ use crate::{de::FortFormat, format_specs::{FortField, IntBase, RealFmt}, serde_c
 pub fn to_string<T>(value: T, fmt: &FortFormat) -> SResult<String> 
 where T: ser::Serialize
 {
-    let mut serializer = Serializer::new(fmt);
+    let mut serializer = Serializer::<_, &str>::new(fmt);
     value.serialize(&mut serializer)?;
     Ok(serializer.try_into_string()?)
 }
@@ -503,8 +503,8 @@ where T: ser::Serialize
 /// 
 /// Like [`to_string`], this will return an error if serialization fails or if the resulting
 /// bytes cannot be converted to UTF-8.
-pub fn to_string_with_fields<T>(value: T, fmt: &FortFormat, fields: &[&str]) -> SResult<String> 
-where T: ser::Serialize
+pub fn to_string_with_fields<T, F>(value: T, fmt: &FortFormat, fields: &[F]) -> SResult<String> 
+where T: ser::Serialize, F: AsRef<str>
 {
     let mut serializer = Serializer::new_with_fields(fmt, fields);
     value.serialize(&mut serializer)?;
@@ -515,8 +515,8 @@ where T: ser::Serialize
 /// 
 /// Use this method if you need to pass custom settings. See [`SerSettings`] for available
 /// options. Pass `None` for `fields` if there are no field names to match up.
-pub fn to_string_custom<T>(value: T, fmt: &FortFormat, fields: Option<&[&str]>, settings: SerSettings) -> SResult<String> 
-where T: ser::Serialize
+pub fn to_string_custom<T, F>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings) -> SResult<String> 
+where T: ser::Serialize, F: AsRef<str>
 {
     let mut serializer = Serializer::new_custom(fmt, fields, settings);
     value.serialize(&mut serializer)?;
@@ -541,7 +541,7 @@ where T: ser::Serialize
 pub fn to_bytes<T>(value: T, fmt: &FortFormat) -> SResult<Vec<u8>> 
 where T: ser::Serialize    
 {
-    let mut serializer = Serializer::new(fmt);
+    let mut serializer = Serializer::<_, &str>::new(fmt);
     value.serialize(&mut serializer)?;
     Ok(serializer.into_bytes())
 }
@@ -598,7 +598,7 @@ where
     T: ser::Serialize,
     W: Write
 {
-    let mut serializer = Serializer::new_writer(fmt, writer);
+    let mut serializer = Serializer::<_, &str>::new_writer(fmt, writer);
     value.serialize(&mut serializer)?;
     serializer.end_record()?;
     Ok(())
@@ -732,26 +732,26 @@ impl MapSerHelper {
 }
 
 /// Serializer for Fortran-format writers
-struct Serializer<'f, W: Write> {
+struct Serializer<'f, W: Write, F: AsRef<str>> {
     buf: W,
     fmt: &'f FortFormat,
     fmt_idx: usize,
-    fields: Option<&'f[ &'f str]>,
+    fields: Option<&'f[F]>,
     field_idx: usize,
     map_helper: MapSerHelper,
     settings: SerSettings,
 }
 
-impl<'f> Serializer<'f, Vec<u8>> {
+impl<'f, F: AsRef<str>> Serializer<'f, Vec<u8>, F> {
     pub fn new(fmt: &'f FortFormat) -> Self {
         Self { buf: vec![], fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
     }
 
-    pub fn new_with_fields(fmt: &'f FortFormat, fields: &'f[&'f str]) -> Self {
+    pub fn new_with_fields(fmt: &'f FortFormat, fields: &'f[F]) -> Self {
         Self { buf: vec![], fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
     }
 
-    pub fn new_custom(fmt: &'f FortFormat, fields: Option<&'f[&'f str]>, settings: SerSettings) -> Self {
+    pub fn new_custom(fmt: &'f FortFormat, fields: Option<&'f[F]>, settings: SerSettings) -> Self {
         Self { buf: vec![], fmt, fmt_idx: 0, fields, field_idx: 0, map_helper: MapSerHelper::default(), settings }
     }
 
@@ -764,21 +764,21 @@ impl<'f> Serializer<'f, Vec<u8>> {
     }
 }
 
-impl <'f, W: Write> Serializer<'f, W> {
+impl <'f, W: Write, F: AsRef<str>> Serializer<'f, W, F> {
     pub fn new_writer(fmt: &'f FortFormat, writer: W) -> Self {
         Self { buf: writer, fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
     }
 
-    pub fn new_writer_with_fields(fmt: &'f FortFormat, fields: &'f[&'f str], writer: W) -> Self {
+    pub fn new_writer_with_fields(fmt: &'f FortFormat, fields: &'f[F], writer: W) -> Self {
         Self { buf: writer, fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
     }
 
-    pub fn new_writer_custom(fmt: &'f FortFormat, fields: Option<&'f[&'f str]>, settings: SerSettings, writer: W) -> Self {
+    pub fn new_writer_custom(fmt: &'f FortFormat, fields: Option<&'f[F]>, settings: SerSettings, writer: W) -> Self {
         Self { buf: writer, fmt, fmt_idx: 0, fields: fields, field_idx: 0, map_helper: MapSerHelper::default(), settings }
     }
 }
 
-impl<'f, W: Write + 'f> Serializer<'f, W> {
+impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
     // This shares a lot of code with the Deserializer. I tried refactoring that out
     // into an inner struct, but that ended up being more awkward because the inner
     // struct didn't know about the Deserializer's input string. Another option
@@ -818,7 +818,7 @@ impl<'f, W: Write + 'f> Serializer<'f, W> {
 
     fn curr_field(&mut self) -> Option<&str> {
         if let Some(fields) = self.fields {
-            fields.get(self.field_idx).map(|f| *f)
+            fields.get(self.field_idx).map(|f| f.as_ref())
         } else {
             panic!("Called next_field on a deserializer without fields")
         }
@@ -831,7 +831,7 @@ impl<'f, W: Write + 'f> Serializer<'f, W> {
 
         self.fields.map(|f| f.get(self.field_idx - 1))
             .flatten()
-            .map(|f| *f)
+            .map(|f| f.as_ref())
     }
 
     fn peek_fmt(&mut self) -> Option<&FortField> {
@@ -865,8 +865,8 @@ impl<'f, W: Write + 'f> Serializer<'f, W> {
     fn get_fmt_and_index_offset_for_field(&self, field_name: &str) -> Option<(usize, FortField)> {
         if let Some(fields) = self.fields {
             let mut i = 0;
-            for &fname in &fields[self.field_idx..] {
-                if field_name == fname {
+            for fname in &fields[self.field_idx..] {
+                if field_name == fname.as_ref() {
                     let fmt = self.get_nth_nonskip_fmt(self.field_idx + i)?;
                     return Some((i, *fmt));
                 }
@@ -999,7 +999,7 @@ impl<'f, W: Write + 'f> Serializer<'f, W> {
 }
 
 
-impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::Serializer for &'a mut Serializer<'f, W, F> {
     type Ok = ();
     type Error = SError;
 
@@ -1213,7 +1213,7 @@ impl<'a, 'f, W: Write + 'f> ser::Serializer for &'a mut Serializer<'f, W> {
     }
 }
 
-impl<'a, 'f, W: Write + 'f> ser::SerializeSeq for &'a mut Serializer<'f, W> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeSeq for &'a mut Serializer<'f, W, F> {
     type Ok = ();
 
     type Error = SError;
@@ -1231,7 +1231,7 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeSeq for &'a mut Serializer<'f, W> {
     }
 }
 
-impl<'a, 'f, W: Write + 'f> ser::SerializeTuple for &'a mut Serializer<'f, W> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTuple for &'a mut Serializer<'f, W, F> {
     type Ok = ();
 
     type Error = SError;
@@ -1250,7 +1250,7 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeTuple for &'a mut Serializer<'f, W> {
     }
 }
 
-impl<'a, 'f, W: Write + 'f> ser::SerializeTupleStruct for &'a mut Serializer<'f, W> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTupleStruct for &'a mut Serializer<'f, W, F> {
     type Ok = ();
 
     type Error = SError;
@@ -1269,7 +1269,7 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeTupleStruct for &'a mut Serializer<'f,
     }
 }
 
-impl<'a, 'f, W: Write + 'f> ser::SerializeTupleVariant for &'a mut Serializer<'f, W> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTupleVariant for &'a mut Serializer<'f, W, F> {
     type Ok = ();
 
     type Error = SError;
@@ -1289,7 +1289,7 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeTupleVariant for &'a mut Serializer<'f
 }
 
 
-impl<'a, 'f, W: Write + 'f> ser::SerializeMap for &'a mut Serializer<'f, W> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeMap for &'a mut Serializer<'f, W, F> {
     type Ok = ();
 
     type Error = SError;
@@ -1324,7 +1324,7 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeMap for &'a mut Serializer<'f, W> {
 // This will have to be a different structure; if it has known fields, then
 // this will have to build a Vec<Vec<u8>> to put the elements in the correct
 // order and write that to the buffer at the end. Same of SerializeMap.
-impl<'a, 'f, W: Write + 'f> ser::SerializeStruct for &'a mut Serializer<'f, W> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeStruct for &'a mut Serializer<'f, W, F> {
     type Ok = ();
 
     type Error = SError;
@@ -1347,7 +1347,7 @@ impl<'a, 'f, W: Write + 'f> ser::SerializeStruct for &'a mut Serializer<'f, W> {
     }
 }
 
-impl<'a, 'f, W: Write + 'f> ser::SerializeStructVariant for &'a mut Serializer<'f, W> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeStructVariant for &'a mut Serializer<'f, W, F> {
     type Ok = ();
 
     type Error = SError;
@@ -2079,7 +2079,7 @@ mod tests {
         
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
         let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
-        let s = to_string_custom(value, &fmt, None, settings).unwrap();
+        let s = to_string_custom::<_, &str>(value, &fmt, None, settings).unwrap();
         assert_eq!(s, "F FIL F FILL_ FILL_VAL");
     }
 
@@ -2089,7 +2089,7 @@ mod tests {
             .fill_method(NoneFill::new_partial_typed(-999, -999.999));
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
         let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
-        let s = to_string_custom(value, &fmt, None, settings).unwrap();
+        let s = to_string_custom::<_, &str>(value, &fmt, None, settings).unwrap();
         assert_eq!(s, "* *** *  -999 -999.999");
     }
 
@@ -2099,7 +2099,7 @@ mod tests {
             .fill_method(NoneFill::new_typed(false, -999, -999.999, "N/A"));
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
         let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
-        let s = to_string_custom(value, &fmt, None, settings).unwrap();
+        let s = to_string_custom::<_, &str>(value, &fmt, None, settings).unwrap();
         assert_eq!(s, "N/A N/A F  -999 -999.999");
     }
 
