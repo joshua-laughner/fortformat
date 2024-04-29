@@ -162,7 +162,7 @@ impl From<PError> for DError {
 /// the unit type, and unit structs to the output. When deserializing, it
 /// is used to determine whether an `Option` value should be `Some` or
 /// `None`. (It is not needed for deseralizing unit types/structs.)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NoneFill {
     /// This variant will represent fill values with a single character
     /// repeated to fill the width of the field. This is the default,
@@ -187,11 +187,16 @@ pub enum NoneFill {
 
 impl Default for NoneFill {
     fn default() -> Self {
-        Self::RepChar('*'.try_into().expect("Should be able to encode '*' as a single byte"))
+        Self::default_inner()
     }
 }
 
 impl NoneFill {
+    pub(crate) const fn default_inner() -> Self {
+        // need a const default function for the static default serialization settings.
+        Self::RepChar(b'*')
+    }
+
     /// Create a new `NoneFill::RepChar` instance with `c` as the fill byte.
     /// 
     /// Note that `c` must be a character which can be written as one byte -

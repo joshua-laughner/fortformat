@@ -474,6 +474,10 @@ use ryu_floating_decimal::d2d;
 use serde::ser;
 use crate::{de::FortFormat, format_specs::{FortField, IntBase, RealFmt}, serde_common::{NoneFill, SError, SResult}};
 
+// TODO: debug why settings for left align aren't carrying through structures properly
+// (collate results example)
+static DEFAULT_SER_SETTINGS: SerSettings = SerSettings { fill_method: NoneFill::default_inner(), newline: b"\n", align_left_str: false };
+
 /// Serialize a value into a string using the given Fortran format.
 /// 
 /// When serializing structures or maps using this function, the order of the fields
@@ -517,7 +521,7 @@ where T: ser::Serialize, F: AsRef<str>
 /// options. Pass `None` for `fields` if there are no field names to match up. Note that
 /// calling without fields will require annotating the type F for the fields, so you would
 /// call this as `to_string_custom::<_, &str>(...)` in that case.
-pub fn to_string_custom<T, F>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings) -> SResult<String> 
+pub fn to_string_custom<T, F>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: &SerSettings) -> SResult<String> 
 where T: ser::Serialize, F: AsRef<str>
 {
     let mut serializer = Serializer::new_custom(fmt, fields, settings);
@@ -572,7 +576,7 @@ where T: ser::Serialize
 pub fn to_bytes_custom<T, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings) -> SResult<Vec<u8>> 
 where T: ser::Serialize    
 {
-    let mut serializer = Serializer::new_custom(fmt, fields, settings);
+    let mut serializer = Serializer::new_custom(fmt, fields, &settings);
     value.serialize(&mut serializer)?;
     Ok(serializer.into_bytes())
 }
@@ -630,7 +634,7 @@ where
 /// calling without fields will require annotating the type F for the fields, so you would
 /// call this as `to_string_custom::<_, &str>(...)` in that case. You can change the newline
 /// written to the end of the recrod with the [`SerSettings`] instance. 
-pub fn to_writer_custom<T, W, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings, writer: W) -> SResult<()> 
+pub fn to_writer_custom<T, W, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: &SerSettings, writer: W) -> SResult<()> 
 where
     T: ser::Serialize,
     W: Write
@@ -652,7 +656,7 @@ where
 /// as it won't have to rebuild the serializer for each line. However, if you only
 /// have a lazy iterator over your values, you will need to call one of the `to_writer*`
 /// functions for each element.
-pub fn many_to_writer_custom<T, W, F>(values: &[T], fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings, writer: W) -> SResult<()> 
+pub fn many_to_writer_custom<T, W, F>(values: &[T], fmt: &FortFormat, fields: Option<&[F]>, settings: &SerSettings, writer: W) -> SResult<()> 
 where
     T: ser::Serialize,
     W: Write,
@@ -681,7 +685,7 @@ where
 /// 
 /// Each of the methods' documentation describes the purpose of its setting
 /// and the default.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SerSettings {
     fill_method: NoneFill,
     newline: &'static [u8],
@@ -690,11 +694,7 @@ pub struct SerSettings {
 
 impl Default for SerSettings {
     fn default() -> Self {
-        Self { 
-            fill_method: Default::default(),
-            newline: b"\n",
-            align_left_str: false
-        }
+        DEFAULT_SER_SETTINGS.clone()
     }
 }
 
@@ -762,19 +762,19 @@ struct Serializer<'f, W: Write, F: AsRef<str>> {
     fields: Option<&'f[F]>,
     field_idx: usize,
     map_helper: MapSerHelper,
-    settings: SerSettings,
+    settings: &'f SerSettings,
 }
 
 impl<'f, F: AsRef<str>> Serializer<'f, Vec<u8>, F> {
     pub fn new(fmt: &'f FortFormat) -> Self {
-        Self { buf: vec![], fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
+        Self { buf: vec![], fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default(), settings: &DEFAULT_SER_SETTINGS }
     }
 
     pub fn new_with_fields(fmt: &'f FortFormat, fields: &'f[F]) -> Self {
-        Self { buf: vec![], fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
+        Self { buf: vec![], fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default(), settings: &DEFAULT_SER_SETTINGS }
     }
 
-    pub fn new_custom(fmt: &'f FortFormat, fields: Option<&'f[F]>, settings: SerSettings) -> Self {
+    pub fn new_custom(fmt: &'f FortFormat, fields: Option<&'f[F]>, settings: &'f SerSettings) -> Self {
         Self { buf: vec![], fmt, fmt_idx: 0, fields, field_idx: 0, map_helper: MapSerHelper::default(), settings }
     }
 
@@ -789,14 +789,14 @@ impl<'f, F: AsRef<str>> Serializer<'f, Vec<u8>, F> {
 
 impl <'f, W: Write, F: AsRef<str>> Serializer<'f, W, F> {
     pub fn new_writer(fmt: &'f FortFormat, writer: W) -> Self {
-        Self { buf: writer, fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
+        Self { buf: writer, fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default(), settings: &DEFAULT_SER_SETTINGS }
     }
 
     pub fn new_writer_with_fields(fmt: &'f FortFormat, fields: &'f[F], writer: W) -> Self {
-        Self { buf: writer, fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default(), settings: SerSettings::default() }
+        Self { buf: writer, fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default(), settings: &DEFAULT_SER_SETTINGS }
     }
 
-    pub fn new_writer_custom(fmt: &'f FortFormat, fields: Option<&'f[F]>, settings: SerSettings, writer: W) -> Self {
+    pub fn new_writer_custom(fmt: &'f FortFormat, fields: Option<&'f[F]>, settings: &'f SerSettings, writer: W) -> Self {
         Self { buf: writer, fmt, fmt_idx: 0, fields: fields, field_idx: 0, map_helper: MapSerHelper::default(), settings }
     }
 }
@@ -1479,7 +1479,6 @@ pub(crate) fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
 
 pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32) -> SResult<()> {
     let v_is_neg = v < 0.0;
-    // println!("v = {v}");
     let v = if v == 0.0 {
         ryu_floating_decimal::FloatingDecimal64{ mantissa: 0, exponent: 0 }
     } else { 
@@ -1811,7 +1810,7 @@ mod tests {
         assert_eq!(s, "abcde");
 
         let settings = SerSettings::default().align_left_str(true);
-        let s = to_string_custom::<_, &str>("abc", &fmt, None, settings).unwrap();
+        let s = to_string_custom::<_, &str>("abc", &fmt, None, &settings).unwrap();
         assert_eq!(s, "abc  ");
     }
 
@@ -2116,7 +2115,7 @@ mod tests {
         
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
         let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
-        let s = to_string_custom::<_, &str>(value, &fmt, None, settings).unwrap();
+        let s = to_string_custom::<_, &str>(value, &fmt, None, &settings).unwrap();
         assert_eq!(s, "F FIL F FILL_ FILL_VAL");
     }
 
@@ -2126,7 +2125,7 @@ mod tests {
             .fill_method(NoneFill::new_partial_typed(-999, -999.999));
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
         let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
-        let s = to_string_custom::<_, &str>(value, &fmt, None, settings).unwrap();
+        let s = to_string_custom::<_, &str>(value, &fmt, None, &settings).unwrap();
         assert_eq!(s, "* *** *  -999 -999.999");
     }
 
@@ -2136,7 +2135,7 @@ mod tests {
             .fill_method(NoneFill::new_typed(false, -999, -999.999, "N/A"));
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
         let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
-        let s = to_string_custom::<_, &str>(value, &fmt, None, settings).unwrap();
+        let s = to_string_custom::<_, &str>(value, &fmt, None, &settings).unwrap();
         assert_eq!(s, "N/A N/A F  -999 -999.999");
     }
 
@@ -2161,7 +2160,7 @@ mod tests {
         ];
         let fmt = FortFormat::parse("(a2,1x,f7.3,1x,f8.3)").unwrap();
         let mut buf = vec![];
-        many_to_writer_custom::<_, _, &str>(&values, &fmt, None, SerSettings::default(), &mut buf).unwrap();
+        many_to_writer_custom::<_, _, &str>(&values, &fmt, None, &SerSettings::default(), &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s, "pa  45.945  -90.273\ndb -12.450  130.930\nlh -45.038  169.684\n");
     }
@@ -2175,7 +2174,7 @@ mod tests {
         ];
         let fmt = FortFormat::parse("(i1,1x,f5.1,1x,a5)").unwrap();
         let mut buf = vec![];
-        many_to_writer_custom(&values, &fmt, Some(&["b", "c", "a"]), SerSettings::default(), &mut buf).unwrap();
+        many_to_writer_custom(&values, &fmt, Some(&["b", "c", "a"]), &SerSettings::default(), &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s, "1 100.0 alpha\n2 200.0  beta\n3 300.0 gamma\n");
     }
