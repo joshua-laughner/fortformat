@@ -1663,7 +1663,7 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
         }
     }
 
-    let n_digits = if e_bytes.len() < (exp_nchar as usize) - 2 {
+    let n_digits = if e_bytes.len() <= (exp_nchar as usize) - 2 {
         buf.write(exp_ch.as_bytes())?;
         exp_nchar - 2
     } else {
@@ -1901,6 +1901,9 @@ mod tests {
         // let s = to_string(3.14, &fmt).unwrap();
         // assert_eq!(s, "0.314E+00001");
 
+        let fmt = FortFormat::parse("(1pe12.4)").unwrap();
+        let s = to_string(9.8765e35, &fmt).unwrap();
+        assert_eq!(s, "  9.8765E+35");
     }
 
     #[test]
