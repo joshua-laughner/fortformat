@@ -813,7 +813,7 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
             // Consume any skips (i.e. 1x, 2x) in the format, also adding space
             // to the output. This can be modified to handle other types
             // of Fortran positioning formats in the future.
-            let peeked_fmt = self.fmt.fields.get(self.fmt_idx);
+            let peeked_fmt = self.fmt.get_field(self.fmt_idx);
             match peeked_fmt {
                 Some(&FortField::Skip) => {
                     self.buf.write(b" ")?;
@@ -827,7 +827,7 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
     fn next_fmt(&mut self) -> SResult<&FortField> {
         self.advance_over_skips()?;
         loop {
-            let next_fmt = self.fmt.fields.get(self.fmt_idx);
+            let next_fmt = self.fmt.get_field(self.fmt_idx);
             match next_fmt {
                 Some(field) => {
                     self.fmt_idx += 1;
@@ -863,7 +863,7 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
         // might fail).
         let mut i = self.fmt_idx;
         loop {
-            let fmt = self.fmt.fields.get(i)?;
+            let fmt = self.fmt.get_field(i)?;
             if !fmt.is_positional() {
                 return Some(fmt);
             }
@@ -875,7 +875,7 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
         let mut i = 0;
         let mut j = 0;
         loop {
-            let fmt = self.fmt.fields.get(j)?;
+            let fmt = self.fmt.get_field(j)?;
             if !fmt.is_positional() && i == n {
                 return Some(fmt)
             } else if !fmt.is_positional() {
@@ -988,7 +988,7 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
 
             // TODO: I don't think this will work for fields that are themselves structures or maps. Will need
             // to iterate.
-            let fortfmt = FortFormat{ fields: vec![fmt] };
+            let fortfmt = FortFormat::Fixed(vec![fmt]);
             let bytes = to_bytes(value, &fortfmt)?;
             self.map_helper.data[offset] = Some(bytes);
         } else {

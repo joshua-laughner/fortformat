@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+error-stack = "0.4.1"
 pest = "2.5.3"
 pest_derive = "2.5.3"
 polars = {version = "0.35", default-features = false, features = ["rows", "fmt"], optional = true }

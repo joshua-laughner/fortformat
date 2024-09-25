@@ -281,7 +281,7 @@ impl<'de, F: AsRef<str>> Deserializer<'de, F> {
             // Consume any skips (i.e. 1x, 2x) in the format, also advancing
             // the internal string. This can be modified to handle other types
             // of Fortran positioning formats in the future.
-            let peeked_fmt = self.fmt.fields.get(self.fmt_idx);
+            let peeked_fmt = self.fmt.get_field(self.fmt_idx);
             match peeked_fmt {
                 Some(&FortField::Skip) => {
                     self.fmt_idx += 1;
@@ -295,7 +295,7 @@ impl<'de, F: AsRef<str>> Deserializer<'de, F> {
     fn next_fmt(&mut self) -> DResult<&FortField> {
         self.advance_over_skips();
         loop {
-            let next_fmt = self.fmt.fields.get(self.fmt_idx);
+            let next_fmt = self.fmt.get_field(self.fmt_idx);
             match next_fmt {
                 Some(field) => {
                     self.fmt_idx += 1;
@@ -328,7 +328,7 @@ impl<'de, F: AsRef<str>> Deserializer<'de, F> {
     #[allow(dead_code)] // keeping this function for now in case it is needed later
     fn peek_fmt(&mut self) -> Option<&FortField> {
         self.advance_over_skips();
-        self.fmt.fields.get(self.fmt_idx)
+        self.fmt.get_field(self.fmt_idx)
     }
 
     fn rewind_fmt(&mut self) {

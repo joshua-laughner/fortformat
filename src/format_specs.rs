@@ -285,22 +285,28 @@ impl From<FortValue> for polars::datatypes::AnyValue<'_> {
 /// Which set it yields will be documented by the functions that return it.
 pub struct FieldIter<'i>{
     all: bool,
-    fields: std::slice::Iter<'i, FortField>,
+    fields: Option<std::slice::Iter<'i, FortField>>,
 }
 
 impl<'i> Iterator for FieldIter<'i> {
     type Item = &'i FortField;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let element = self.fields.next();
-            if !self.all && element.map(|e| e.is_positional()).unwrap_or(false) {
-                // Keep going, we don't want to return skips or other positional
-                // values.
-            } else {
-                return element;
+        if let Some(fields) = &mut self.fields {
+            loop {
+                let element = fields.next();
+                if !self.all && element.map(|e| e.is_positional()).unwrap_or(false) {
+                    // Keep going, we don't want to return skips or other positional
+                    // values.
+                } else {
+                    return element;
+                }
             }
+        } else {
+            None
         }
+
+        
     }
 }
 
@@ -317,11 +323,19 @@ impl<'i> Iterator for FieldIter<'i> {
 /// 
 /// Note that the format string must include the opening and closing parentheses.
 #[derive(Debug, Clone)]
-pub struct FortFormat {
-    pub(crate) fields: Vec<FortField>
+pub enum FortFormat {
+    Fixed(Vec<FortField>),
+    ListDirected
 }
 
 impl FortFormat {
+    pub fn get_field(&self, index: usize) -> Option<&FortField> {
+        match self {
+            FortFormat::Fixed(vec) => vec.get(index),
+            FortFormat::ListDirected => None,
+        }
+    }
+    
     /// Parse a Fortran format string and return a `FortFormat` instance.
     /// 
     /// The format string must include the opening and closing parentheses. That is,
@@ -428,22 +442,33 @@ impl FortFormat {
         }
         // let fmt = if let Rule::format(f) = tree { f } else { unreachable!()};
 
-        Ok(Self { fields })
+        Ok(Self::Fixed(fields))
     }
 
     /// Consume the `FortFormat` instance and return the inner `Vec<FortField>`.
-    pub fn into_fields(self) -> Vec<FortField> {
-        self.fields
+    /// If this is a `ListDirected` format, it will return `None`.
+    pub fn into_fields(self) -> Option<Vec<FortField>> {
+        match self {
+            FortFormat::Fixed(vec) => Some(vec),
+            FortFormat::ListDirected => None,
+        }
     }
 
     /// Iterate over all fields in this format (including positionals)
     pub fn iter_fields(&self) -> FieldIter {
-        FieldIter{fields: self.fields.iter(), all: true}
+        match self {
+            FortFormat::Fixed(vec) => FieldIter{fields: Some(vec.iter()), all: true},
+            FortFormat::ListDirected => FieldIter { fields: None, all: true },
+        }
+        
     }
 
     /// Iterate over non-positional fields in this format
     pub fn iter_non_pos_fields(&self) -> FieldIter {
-        FieldIter{fields: self.fields.iter(), all: false}
+        match self {
+            FortFormat::Fixed(vec) => FieldIter{fields: Some(vec.iter()), all: false},
+            FortFormat::ListDirected => FieldIter { fields: None, all: false },
+        }
     }
 
     /// Return the number of non-positional fields in this format
@@ -533,11 +558,11 @@ mod tests {
 
     #[test]
     fn test_char() -> PResult<()> {
-        let v = FortFormat::parse("(a)")?.into_fields();
+        let v = FortFormat::parse("(a)")?.into_fields().unwrap();
         assert_eq!(v.len(), 1, "Parsing '(a)' did not return exactly 1 field");
         assert_eq!(v.last().unwrap(), &FortField::Char { width: None }, "Parsing '(a)' failed");
 
-        let v = FortFormat::parse("(a16)")?.into_fields();
+        let v = FortFormat::parse("(a16)")?.into_fields().unwrap();
         assert_eq!(v.len(), 1, "Parsing '(a16)' did not return exactly 1 field");
         assert_eq!(v.last().unwrap(), &FortField::Char { width: Some(16) }, "Parsing '(a16)' failed");
 
@@ -548,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_logical() -> PResult<()> {
-        let v = FortFormat::parse("(l1)")?.into_fields();
+        let v = FortFormat::parse("(l1)")?.into_fields().unwrap();
         assert_eq!(v.len(), 1, "Parsing '(l1)' did not return exactly 1 field");
         assert_eq!(v.last().unwrap(), &FortField::Logical { width: 1 }, "Parsing '(l1)' failed");
 
@@ -579,11 +604,11 @@ mod tests {
     fn test_integer(base: IntBase) -> PResult<()> {
 
 
-        let v = FortFormat::parse(&format!("({base}8)"))?.into_fields();
+        let v = FortFormat::parse(&format!("({base}8)"))?.into_fields().unwrap();
         assert_eq!(v.len(), 1, "Parsing '({base}8)' did not return exactly 1 field");
         assert_eq!(v.last().unwrap(), &FortField::Integer { width: 8, zeros: None, base }, "Parsing '({base}8)' failed");
 
-        let v = FortFormat::parse(&format!("({base}8.6)"))?.into_fields();
+        let v = FortFormat::parse(&format!("({base}8.6)"))?.into_fields().unwrap();
         assert_eq!(v.len(), 1, "Parsing '(i{base}.6)' did not return exactly 1 field");
         assert_eq!(v.last().unwrap(), &FortField::Integer { width: 8, zeros: Some(6), base }, "Parsing '({base}8.6)' failed");
 
@@ -617,15 +642,15 @@ mod tests {
     }
 
     fn test_real(fmt: RealFmt) -> PResult<()> {
-        let v = FortFormat::parse(&format!("({fmt}8)"))?.into_fields();
+        let v = FortFormat::parse(&format!("({fmt}8)"))?.into_fields().unwrap();
         assert_eq!(v.len(), 1, "Parsing '({fmt}8)' did not return exactly 1 field");
         assert_eq!(v.last().unwrap(), &FortField::Real { width: 8, precision: None, fmt, scale: 0 }, "Parsing '({fmt}8)' failed");
 
-        let v = FortFormat::parse(&format!("({fmt}8.6)"))?.into_fields();
+        let v = FortFormat::parse(&format!("({fmt}8.6)"))?.into_fields().unwrap();
         assert_eq!(v.len(), 1, "Parsing '({fmt}8.6)' did not return exactly 1 field");
         assert_eq!(v.last().unwrap(), &FortField::Real { width: 8, precision: Some(6), fmt, scale: 0 }, "Parsing '({fmt}8.6)' failed");
 
-        let v = FortFormat::parse(&format!("(2p{fmt}8.6)"))?.into_fields();
+        let v = FortFormat::parse(&format!("(2p{fmt}8.6)"))?.into_fields().unwrap();
         assert_eq!(v.len(), 1, "Parsing '(2p{fmt}8.6)' did not return exactly 1 field");
         assert_eq!(v.last().unwrap(), &FortField::Real { width: 8, precision: Some(6), fmt, scale: 2 }, "Parsing '(2p{fmt}8.6)' failed");
 
@@ -641,7 +666,7 @@ mod tests {
     #[test]
     fn test_scales() -> PResult<()> {
         let s = "(f7.2 2p f8.3 -3p f5.1 f6 0p f10.3)";
-        let v = FortFormat::parse(s)?.into_fields();
+        let v = FortFormat::parse(s)?.into_fields().unwrap();
         let expected = vec![
             FortField::Real { width: 7, precision: Some(2), fmt: RealFmt::F, scale: 0 },
             FortField::Real { width: 8, precision: Some(3), fmt: RealFmt::F, scale: 2 },
@@ -655,7 +680,7 @@ mod tests {
 
     #[test]
     fn test_elided_scale() -> PResult<()> {
-        let v = FortFormat::parse("(-2pf13.5)")?.into_fields();
+        let v = FortFormat::parse("(-2pf13.5)")?.into_fields().unwrap();
         let expected = [FortField::Real { width: 13, precision: Some(5), fmt: RealFmt::F, scale: -2 }];
         assert_eq!(v, expected);
         Ok(())
@@ -664,7 +689,7 @@ mod tests {
     #[test]
     fn test_simple_repeats() -> PResult<()> {
         let s = "(3i8 2f7.2)";
-        let v = FortFormat::parse(s)?.into_fields();
+        let v = FortFormat::parse(s)?.into_fields().unwrap();
         let expected = vec![
             FortField::Integer { width: 8, zeros: None, base: IntBase::Decimal },
             FortField::Integer { width: 8, zeros: None, base: IntBase::Decimal },
@@ -679,7 +704,7 @@ mod tests {
     #[test]
     fn test_sequence() -> PResult<()> {
         let s = "(a32 2x l4 i8 f10.3 e11.4 d12.5 g7.2)";
-        let v = FortFormat::parse(s)?.into_fields();
+        let v = FortFormat::parse(s)?.into_fields().unwrap();
         let expected = vec![
             FortField::Char { width: Some(32) },
             FortField::Skip,
@@ -699,7 +724,7 @@ mod tests {
     #[test]
     fn test_nested_one_level() -> PResult<()> {
         let s = "(a32 2(1x f7.4))";
-        let v = FortFormat::parse(s)?.into_fields();
+        let v = FortFormat::parse(s)?.into_fields().unwrap();
         let expected = vec![
             FortField::Char { width: Some(32) },
             FortField::Skip,
@@ -715,7 +740,7 @@ mod tests {
     #[test]
     fn test_nested_two_level() -> PResult<()> {
         let s = "(3(a8 1x 2(i4 1x f7.4 1x)))";
-        let v = FortFormat::parse(s)?.into_fields();
+        let v = FortFormat::parse(s)?.into_fields().unwrap();
         let expected = vec![
             FortField::Char { width: Some(8) },
             FortField::Skip,
