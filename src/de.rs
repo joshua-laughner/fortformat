@@ -387,6 +387,7 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
             Some(FortField::Integer { width: _, zeros: _, base: _ }) => self.deserialize_i64(visitor),
             Some(FortField::Logical { width: _ }) => self.deserialize_bool(visitor),
             Some(FortField::Real { width: _, precision: _, fmt: _, scale: _ }) => self.deserialize_f64(visitor),
+            Some(FortField::Any) => self.deserialize_any(visitor),
             Some(FortField::Skip) => panic!("Got a skip format during peak")
         }
     }

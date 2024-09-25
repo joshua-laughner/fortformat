@@ -236,8 +236,8 @@ impl NoneFill {
 
     pub(crate) fn make_fill_bytes(&self, fmt: &FortField, left_align_str: bool) -> SResult<Vec<u8>> {
         match self {
-            NoneFill::RepChar(byte) => Ok(Self::_fill_bytes_rep_char(*byte, fmt.width())),
-            NoneFill::String(bytes) => Self::_file_bytes_string(bytes, Some(fmt.width()), left_align_str),
+            NoneFill::RepChar(byte) => Ok(Self::_fill_bytes_rep_char(*byte, fmt.width().unwrap_or(0))),
+            NoneFill::String(bytes) => Self::_file_bytes_string(bytes, Some(fmt.width().unwrap_or(0)), left_align_str),
             NoneFill::PartialTyped { int, real, fill_byte } => {
                 match fmt {
                     FortField::Char { width } => Ok(Self::_fill_bytes_rep_char(*fill_byte, width.unwrap_or(1))),
@@ -247,6 +247,7 @@ impl NoneFill {
                         let precision = precision.expect("Format strings for real values must include a precision when writing");
                         Self::_fill_bytes_real(*real, *fmt, *width, precision, *scale)
                     },
+                    FortField::Any => unimplemented!("make_fill_bytes called on an Any format field"),
                     FortField::Skip => panic!("make_fill_bytes called on a positional format field"),
                 }
             },
@@ -259,6 +260,7 @@ impl NoneFill {
                         let precision = precision.expect("Format strings for real values must include a precision when writing");
                         Self::_fill_bytes_real(*real, *fmt, *width, precision, *scale)
                     },
+                    FortField::Any => unimplemented!("make_fill_bytes called on an Any format field"),
                     FortField::Skip => panic!("make_fill_bytes called on a positional format field"),
                 }
             },

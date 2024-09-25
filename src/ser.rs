@@ -920,6 +920,7 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
             FortField::Logical { width } => Some(width),
             FortField::Integer { width, zeros: _, base: _ } => Some(width),
             FortField::Real { width, precision: _, fmt: _, scale: _ } => Some(width),
+            FortField::Any => Some(bytes.len() as u32),
             FortField::Skip => panic!("Should not get a skip format, should have advanced over all skips"),
         };
 
@@ -930,6 +931,10 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
         }
 
         self.buf.write(bytes)?;
+        if let FortField::Any = fmt {
+            // TODO: check how much space Fortran includes, and whether it is written before or after the entry.
+            self.buf.write(b" ")?;
+        }
         Ok(())
     }
 

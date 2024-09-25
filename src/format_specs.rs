@@ -160,7 +160,11 @@ pub enum FortField {
     Real{width: u32, precision: Option<u32>, fmt: RealFmt, scale: i32},
 
     /// A specification indicating to leave a blank space.
-    Skip
+    Skip,
+
+    /// Indicates that the next field may be any type and width - usually because the format
+    /// was `*`, indicating a list-directed format.
+    Any
 }
 
 impl FortField {
@@ -171,17 +175,19 @@ impl FortField {
             FortField::Logical { width: _ } => false,
             FortField::Integer { width: _, zeros: _, base: _ } => false,
             FortField::Real { width: _, precision: _, fmt: _, scale: _ } => false,
+            FortField::Any => false,
             FortField::Skip => true,
         }
     }
 
-    pub fn width(&self) -> u32 {
+    pub fn width(&self) -> Option<u32> {
         match self {
-            FortField::Char { width } => width.unwrap_or(1),
-            FortField::Logical { width } => *width,
-            FortField::Integer { width, zeros, base } => *width,
-            FortField::Real { width, precision, fmt, scale } => *width,
-            FortField::Skip => 1,
+            FortField::Char { width } => Some(width.unwrap_or(1)),
+            FortField::Logical { width } => Some(*width),
+            FortField::Integer { width, zeros, base } => Some(*width),
+            FortField::Real { width, precision, fmt, scale } => Some(*width),
+            FortField::Any => None,
+            FortField::Skip => Some(1),
         }
     }
 
@@ -198,6 +204,7 @@ impl FortField {
             FortField::Logical { width: _ } => Some(polars::datatypes::DataType::Boolean),
             FortField::Integer { width: _, zeros: _, base: _ } => Some(polars::datatypes::DataType::Int64),
             FortField::Real { width: _, precision: _, fmt: _, scale: _ } => Some(polars::datatypes::DataType::Float64),
+            FortField::Any => unimplemented!("polars dtype for list directed format"),
             FortField::Skip => None,
         }
     }
@@ -224,6 +231,7 @@ impl Display for FortField {
                     write!(f, "{p}{fmt}{width}")
                 }
             },
+            FortField::Any => write!(f, "*"),
             FortField::Skip => write!(f, "x"),
         }
     }
@@ -332,10 +340,10 @@ impl FortFormat {
     pub fn get_field(&self, index: usize) -> Option<&FortField> {
         match self {
             FortFormat::Fixed(vec) => vec.get(index),
-            FortFormat::ListDirected => None,
+            FortFormat::ListDirected => Some(&FortField::Any),
         }
     }
-    
+
     /// Parse a Fortran format string and return a `FortFormat` instance.
     /// 
     /// The format string must include the opening and closing parentheses. That is,
