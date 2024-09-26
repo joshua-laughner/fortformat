@@ -352,6 +352,10 @@ impl FortFormat {
     /// 
     /// Returns an error if the format string has invalid syntax.
     pub fn parse(fmt_str: &str) -> PResult<Self> {
+        if fmt_str.trim() == "*" {
+            return Ok(Self::ListDirected);
+        }
+        
         let mut fields = vec![];
         let tree = FortParser::parse(Rule::format, fmt_str)?.next().unwrap();
 

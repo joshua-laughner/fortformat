@@ -92,6 +92,8 @@ pub enum DError {
     FieldListTooShort,
     /// Indicates that the data given ended before all values/fields were deserialized.
     InputEndedEarly,
+    /// Indicates that the data given ended before a closing quote for list-directed input was found.
+    ClosingQuoteMissing{quote: char, start_byte: usize},
     /// Indicates a problem parsing a Fortran format string or value
     ParsingError(FError),
     /// Indicates an invalid format in a Fortran format string
@@ -126,6 +128,7 @@ impl Display for DError {
             },
             Self::FieldListTooShort => write!(f, "Field list ended before all fields of the structure to deserialize into were filled"),
             Self::InputEndedEarly => write!(f, "The input ended before deserialization was complete"),
+            Self::ClosingQuoteMissing{quote, start_byte} => write!(f, "The input ended before a closing quote matching {quote} at byte {start_byte} was found"),
             Self::ParsingError(e) => write!(f, "Error parsing value: {e}"),
             Self::FormatError(e) => write!(f, "Error parsing format: {e}"),
             Self::DeserializationFailure(msg) => write!(f, "Serde deserialization error: {msg}"),

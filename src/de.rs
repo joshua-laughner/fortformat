@@ -264,16 +264,17 @@ pub struct Deserializer<'de, F: AsRef<str>> {
     fmt_idx: usize,
     field_idx: usize,
     fields: Option<&'de [F]>,
+    found_terminal_char: bool,
 }
 
 
 impl<'de, F: AsRef<str>> Deserializer<'de, F> {
     pub fn from_str(input: &'de str, fmt: &'de FortFormat, settings: DeSettings) -> Self {
-        Self { settings, input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: None }
+        Self { settings, input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: None, found_terminal_char: false }
     }
 
     pub fn from_str_with_fields(input: &'de str, fmt: &'de FortFormat, fields: &'de[F], settings: DeSettings) -> Self {
-        Self { settings, input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: Some(fields) }
+        Self { settings, input, input_idx: 0, fmt, fmt_idx: 0, field_idx: 0, fields: Some(fields), found_terminal_char: false }
     }
 
     fn advance_over_skips(&mut self) {
@@ -371,6 +372,110 @@ impl<'de, F: AsRef<str>> Deserializer<'de, F> {
 
         self.input_idx -= nbytes;
     }
+
+    fn peek_char(&self) -> Option<char> {
+        self.input[self.input_idx..].chars().next()
+    }
+
+    fn next_list_directed_substring(&mut self) -> Result<&'de str, DError> {
+        self.skip_list_separators();
+
+        let next_char = self.peek_char()
+            .ok_or_else(|| DError::InputEndedEarly)?;
+
+        if next_char == '\'' || next_char == '"' {
+            // take characters until the next quote - it looks like F77 at least does not
+            // allow for escaping quotes: https://docs.oracle.com/cd/E19957-01/805-4939/6j4m0vnc5/index.html#c400000b7b12
+            self.take_quoted_string()
+        } else {
+            // take characters until the next space, comma, or slash
+            self.take_until_sep()
+        }
+    }
+
+    fn take_quoted_string(&mut self) -> Result<&'de str, DError> {
+        if self.found_terminal_char {
+            return Err(DError::InputEndedEarly)
+        }
+
+        let mut chars = self.input[self.input_idx..].chars();
+        let quote = chars.next().expect("Called take_quoted_string when all characters in the input had already been read.");
+        let mut nbytes = quote.len_utf8();
+        let mut found_end_quote = false;
+
+        for c in chars {
+            nbytes += c.len_utf8();
+            if c == quote {
+                found_end_quote = true;
+                break;
+            }
+        }
+
+        if !found_end_quote {
+            return Err(DError::ClosingQuoteMissing{quote, start_byte: self.input_idx});
+        }
+
+        let nbq = quote.len_utf8();
+        // Only return the part of the string inside the quotes
+        let inner_str = &self.input[self.input_idx+nbq..self.input_idx+nbytes-nbq];
+        self.input_idx += nbytes;
+        
+        Ok(inner_str)
+    }
+
+    fn take_until_sep(&mut self) -> Result<&'de str, DError> {
+        if self.found_terminal_char {
+            return Err(DError::InputEndedEarly)
+        }
+
+        let start = self.input_idx;
+        loop {
+            let c = self.peek_char();
+            if Self::is_list_sep(c) {
+                break;
+            } else if Self::is_terminal_char(c) {
+                self.found_terminal_char = true;
+                break; 
+            } else {
+                self.input_idx += c.map(|c| c.len_utf8()).unwrap_or(0);
+            }
+        }
+
+        let s = &self.input[start..self.input_idx];
+        Ok(s)
+    }
+
+    fn skip_list_separators(&mut self) {
+        loop {
+            let c = self.peek_char();
+            if Self::is_list_sep(c) {
+                self.input_idx += c.map(|c| c.len_utf8()).unwrap_or(0);
+                if c.is_none() {
+                    self.found_terminal_char = true;
+                    break;
+                }
+            } else if Self::is_terminal_char(c) { 
+                self.found_terminal_char = true;
+                break;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn is_list_sep(c: Option<char>) -> bool {
+        if let Some(c) = c {
+            c.is_ascii_whitespace() || c == ','
+        } else {
+            true
+        }
+    }
+
+    fn is_terminal_char(c: Option<char>) -> bool {
+        c.is_some_and(|c| c == '/')
+    }
+
+
 }
 
 impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de, F> {
@@ -387,7 +492,10 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
             Some(FortField::Integer { width: _, zeros: _, base: _ }) => self.deserialize_i64(visitor),
             Some(FortField::Logical { width: _ }) => self.deserialize_bool(visitor),
             Some(FortField::Real { width: _, precision: _, fmt: _, scale: _ }) => self.deserialize_f64(visitor),
-            Some(FortField::Any) => self.deserialize_any(visitor),
+            Some(FortField::Any) => {
+                let s = self.next_list_directed_substring()?;
+                todo!()
+            },
             Some(FortField::Skip) => panic!("Got a skip format during peak")
         }
     }
@@ -398,6 +506,10 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
         let next_fmt = *self.next_fmt()?;
         if let FortField::Logical { width } = next_fmt {
             let substr = self.next_n_bytes(width)?;
+            let b = parsing::parse_logical(substr)?;
+            visitor.visit_bool(b)
+        } else if let FortField::Any = next_fmt {
+            let substr = self.next_list_directed_substring()?;
             let b = parsing::parse_logical(substr)?;
             visitor.visit_bool(b)
         } else {
@@ -438,8 +550,13 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
                 crate::format_specs::IntBase::Hexadecimal => todo!(),
             };
             visitor.visit_i64(v)
+        } else if let FortField::Any = next_fmt {
+            // I don't think octal and hexadecimal integers are supported in list-directed input.
+            let substr = self.next_list_directed_substring()?;
+            let v = parsing::parse_integer(substr)?;
+            visitor.visit_i64(v)
         } else {
-                Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "i64", field_name: self.try_prev_field().map(|f| f.to_string()) })
+            Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "i64", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
     }
 
@@ -475,6 +592,11 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
                     crate::format_specs::IntBase::Octal => todo!(),
                     crate::format_specs::IntBase::Hexadecimal => todo!(),
                 };
+                visitor.visit_u64(v)
+            } else if let FortField::Any = next_fmt {
+                // I don't think octal and hexadecimal integers are supported in list-directed input.
+                let substr = self.next_list_directed_substring()?;
+                let v = parsing::parse_unsigned_integer(substr)?;
                 visitor.visit_u64(v)
             } else {
                 Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "u64", field_name: self.try_prev_field().map(|f| f.to_string()) })
@@ -512,6 +634,20 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
                 v
             };
             visitor.visit_f64(v)
+        } else if let FortField::Any = next_fmt {
+            // Fortran format allows padding with spaces, but Rust does not, hence the trim()
+            let substr = self.next_list_directed_substring()?.trim();
+            let res = if substr.contains("d") || substr.contains("D") {
+                let valstr = substr.replace("d", "e").replace("D", "E");
+                valstr.parse::<f64>()
+            } else {
+                substr.parse::<f64>()
+            };
+
+            let v = res.map_err(|e| FError::ParsingError { s: substr.to_string(), t: "real", reason: format!("Invalid real number format ({e})") })?;
+            // Unlike with fixed format, there's no edge case of values being multiplied
+            // by a power of 10.
+            visitor.visit_f64(v)
         } else {
             Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "f64", field_name: self.try_prev_field().map(|f| f.to_string()) })
         }
@@ -532,6 +668,20 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
             FortField::Char { width: _ } => {
                 Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char (requires 'a' or 'a1' Fortran format)", field_name: self.try_prev_field().map(|f| f.to_string()) })
             },
+            FortField::Any => {
+                let s: Vec<char> = self.next_list_directed_substring()?
+                    .chars()
+                    .collect();
+                if s.len() != 1 {
+                    Err(DError::FormatTypeMismatch { 
+                        spec_type: next_fmt, 
+                        serde_type: "char (list-directed parsing provided a substring with 0 or >1 characters)", 
+                        field_name: self.try_prev_field().map(|f| f.to_string()) 
+                    })
+                } else {
+                    visitor.visit_char(s[0])
+                }
+            }
             _ => {
                 Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char", field_name: self.try_prev_field().map(|f| f.to_string()) })
             }
@@ -544,6 +694,13 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
         let next_fmt = *self.next_fmt()?;
         if let FortField::Char { width } = next_fmt {
             let s = self.next_n_bytes(width.unwrap_or(1))?;
+            if self.settings.trim_strings {
+                visitor.visit_borrowed_str(s.trim())
+            } else {
+                visitor.visit_borrowed_str(s)
+            }
+        } else if let FortField::Any = next_fmt {
+            let s = self.next_list_directed_substring()?;
             if self.settings.trim_strings {
                 visitor.visit_borrowed_str(s.trim())
             } else {
@@ -896,6 +1053,10 @@ mod tests {
 
     use super::*;
 
+    // ---------------------------------- //
+    // Fixed-format deserialization tests //
+    // ---------------------------------- //
+
     #[test]
     fn test_de_bool() -> DResult<()> {
         let ff = FortFormat::parse("(l1)")?;
@@ -1210,6 +1371,121 @@ mod tests {
             FortValue::Char("ZYXWV".to_string())
         ];
         assert_eq!(v, expected);
+        Ok(())
+    }
+
+    // ----------------------------------- //
+    // List-directed deserialization tests //
+    // ----------------------------------- //
+
+    #[test]
+    fn test_list_de_int() -> DResult<()> {
+        let ff = FortFormat::ListDirected;
+
+        let vspace: (i32, i32, i32) = from_str("1 2 34", &ff)?;
+        assert_eq!(vspace, (1, 2, 34));
+
+        // The space around the second comma is deliberate - " , " should
+        // be treated as one separator.
+        let vcomma: (i32, i32, i32) = from_str("4, 56 , 7", &ff)?;
+        assert_eq!(vcomma, (4, 56, 7));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_de_vector_int() -> DResult<()> {
+        let ff = FortFormat::ListDirected;
+        let vspace: Vec<i32> = from_str("1 2 34", &ff)?;
+        assert_eq!(vspace, vec![1, 2, 34]);
+
+        // The space around the second comma is deliberate - " , " should
+        // be treated as one separator.
+        let vcomma: Vec<i32> = from_str("4, 56 , 7", &ff)?;
+        assert_eq!(vcomma, vec![4, 56, 7]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_de_str() -> DResult<()> {
+        let ff = FortFormat::ListDirected;
+        let vspace: (&str, &str) = from_str(r#"hello "my beautiful" world"#, &ff)?;
+        assert_eq!(vspace, ("hello", "my beautiful"));
+
+        let vcomma: (&str, &str, &str) = from_str("goodbye 'my frigid' world ", &ff)?;
+        assert_eq!(vcomma, ("goodbye", "my frigid", "world"));
+
+        let v_first_quote: &str = from_str("'who else' 1 2 3", &ff)?;
+        assert_eq!(v_first_quote, "who else");
+
+        let v_last_quote: (&str, &str) = from_str("and 'last but not least'", &ff)?;
+        assert_eq!(v_last_quote.1, "last but not least");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_de_structs() -> DResult<()> {
+        let ff = FortFormat::ListDirected;
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct InsituCorr<'a> {
+            #[serde(rename="Gas")]
+            gas: &'a str,
+            #[serde(rename="AICF")]
+            aicf: f64,
+            #[serde(rename="AICF_Err")]
+            aicf_err: f64,
+            #[serde(rename="WMO_SCale")]
+            wmo_scale: &'a str
+        }
+
+        let s1de: InsituCorr = from_str_with_fields(
+            r#""xco2"   1.0101  0.0005  "WMO CO2 X2007""#,
+            &ff,
+            &["Gas", "AICF", "AICF_Err", "WMO_Scale"]
+        )?;
+
+        let s1true = InsituCorr {
+            gas: "xco2",
+            aicf: 1.0101,
+            aicf_err: 0.0005,
+            wmo_scale: "WMO CO2 X2007",
+        };
+
+        assert_eq!(s1de, s1true);
+
+        return Ok(());
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct AirmassCorr<'a> {
+            #[serde(rename="Gas")]
+            gas: &'a str,
+            #[serde(rename="ADCF")]
+            adcf: f64,
+            #[serde(rename="ADCF_Err")]
+            adcf_err: f64,
+            g: Option<f64>,
+            p: Option<f64>
+        }
+
+        let s2de: AirmassCorr = from_str_with_fields(
+            r#""xco2_6220"  -0.00903  0.00025   15   4"#,
+            &ff,
+            &["Gas", "ADCF", "ADCF_Err", "g", "p"]
+        )?;
+
+        let s2true = AirmassCorr{
+            gas: "xco2_6220",
+            adcf: -0.00903,
+            adcf_err: 0.00025,
+            g: Some(15.0),
+            p: Some(4.0)
+        };
+
+        assert_eq!(s2de, s2true);
+
         Ok(())
     }
 }
