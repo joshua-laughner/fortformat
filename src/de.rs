@@ -361,6 +361,10 @@ impl<'de, F: AsRef<str>> Deserializer<'de, F> {
         Ok(s)
     }
 
+    fn has_n_bytes_remaining(&self, n: u32) -> bool {
+        self.input.len() > n as usize
+    }
+
     #[allow(dead_code)] // keeping this function for now in case it is needed later
     fn prev_n_bytes(&mut self, n: u32) {
         let n: usize = n.try_into().expect("Could not fit u32 into usize");
@@ -748,7 +752,30 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
-        todo!()
+        // Fortran doesn't really have a mechanism to indicate a null value,
+        // so it really only makes sense to return a none if we're out of format
+        // elements or input.
+        self.advance_over_skips();
+        let next_fmt = self.peek_fmt().map(|f| *f);
+
+        let visit_some = match next_fmt {
+            Some(FortField::Any) => {
+                self.skip_list_separators();
+                !self.found_terminal_char && self.has_n_bytes_remaining(1)
+            },
+            Some(FortField::Char { width }) => self.has_n_bytes_remaining(width.unwrap_or(1)),
+            Some(FortField::Integer { width, zeros: _, base: _ }) => self.has_n_bytes_remaining(width),
+            Some(FortField::Logical { width }) => self.has_n_bytes_remaining(width),
+            Some(FortField::Real { width, precision: _, fmt: _, scale: _ }) => self.has_n_bytes_remaining(width),
+            Some(FortField::Skip) => panic!("Any skip format specifiers should have been skipped over"),
+            None => false,
+        };
+
+        if visit_some {
+            visitor.visit_some(self)
+        } else {
+            visitor.visit_none()
+        }
     }
 
     fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -1504,6 +1531,23 @@ mod tests {
 
         assert_eq!(s2de, s2true, "Deserializing AirmassCorr with the g and p values produced different values than expected.");
 
+        // Third test: a structure where the last fields may be omitted and are omitted.
+        // Also tests a line with whitespace at the end.
+        let s3de: AirmassCorr = from_str_with_fields(
+            r#""xco2"  -0.0068  0.0050   "#,
+            &ff,
+            &["Gas", "ADCF", "ADCF_Err"]
+        )?;
+
+        let s3true = AirmassCorr{
+            gas: "xco2",
+            adcf: -0.0068,
+            adcf_err: 0.005,
+            g: None,
+            p: None
+        };
+
+        assert_eq!(s3de, s3true, "Deserialized AirmassCorr without the g and p value produced different values than expected.");
         Ok(())
     }
 }
