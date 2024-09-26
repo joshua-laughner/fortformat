@@ -377,7 +377,7 @@ impl<'de, F: AsRef<str>> Deserializer<'de, F> {
         self.input[self.input_idx..].chars().next()
     }
 
-    fn next_list_directed_substring(&mut self) -> Result<&'de str, DError> {
+    fn next_list_directed_substring(&mut self, peek: bool) -> Result<&'de str, DError> {
         self.skip_list_separators();
 
         let next_char = self.peek_char()
@@ -386,14 +386,14 @@ impl<'de, F: AsRef<str>> Deserializer<'de, F> {
         if next_char == '\'' || next_char == '"' {
             // take characters until the next quote - it looks like F77 at least does not
             // allow for escaping quotes: https://docs.oracle.com/cd/E19957-01/805-4939/6j4m0vnc5/index.html#c400000b7b12
-            self.take_quoted_string()
+            self.take_quoted_string(peek)
         } else {
             // take characters until the next space, comma, or slash
-            self.take_until_sep()
+            self.take_until_sep(peek)
         }
     }
 
-    fn take_quoted_string(&mut self) -> Result<&'de str, DError> {
+    fn take_quoted_string(&mut self, peek: bool) -> Result<&'de str, DError> {
         if self.found_terminal_char {
             return Err(DError::InputEndedEarly)
         }
@@ -418,12 +418,14 @@ impl<'de, F: AsRef<str>> Deserializer<'de, F> {
         let nbq = quote.len_utf8();
         // Only return the part of the string inside the quotes
         let inner_str = &self.input[self.input_idx+nbq..self.input_idx+nbytes-nbq];
-        self.input_idx += nbytes;
+        if !peek {
+            self.input_idx += nbytes;
+        }
         
         Ok(inner_str)
     }
 
-    fn take_until_sep(&mut self) -> Result<&'de str, DError> {
+    fn take_until_sep(&mut self, peek: bool) -> Result<&'de str, DError> {
         if self.found_terminal_char {
             return Err(DError::InputEndedEarly)
         }
@@ -442,6 +444,9 @@ impl<'de, F: AsRef<str>> Deserializer<'de, F> {
         }
 
         let s = &self.input[start..self.input_idx];
+        if peek {
+            self.input_idx = start;
+        }
         Ok(s)
     }
 
@@ -493,8 +498,24 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
             Some(FortField::Logical { width: _ }) => self.deserialize_bool(visitor),
             Some(FortField::Real { width: _, precision: _, fmt: _, scale: _ }) => self.deserialize_f64(visitor),
             Some(FortField::Any) => {
-                let s = self.next_list_directed_substring()?;
-                todo!()
+                self.next_fmt()?;
+                let s = self.next_list_directed_substring(false)?;
+                let c1 = s.chars().next().unwrap_or(' ');
+                if c1.is_ascii_digit() || c1 == '+' || c1 == '-' {
+                    if let Ok(v) = parsing::parse_integer(s) {
+                        return visitor.visit_i64(v);
+                    }
+
+                    if let Ok(v) = parsing::parse_any_real(s) {
+                        return visitor.visit_f64(v);
+                    }
+                }
+
+                if let Ok(v) = parsing::parse_logical(s) {
+                    return visitor.visit_bool(v);
+                }
+
+                return visitor.visit_str(s);
             },
             Some(FortField::Skip) => panic!("Got a skip format during peak")
         }
@@ -509,7 +530,7 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
             let b = parsing::parse_logical(substr)?;
             visitor.visit_bool(b)
         } else if let FortField::Any = next_fmt {
-            let substr = self.next_list_directed_substring()?;
+            let substr = self.next_list_directed_substring(false)?;
             let b = parsing::parse_logical(substr)?;
             visitor.visit_bool(b)
         } else {
@@ -552,7 +573,7 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
             visitor.visit_i64(v)
         } else if let FortField::Any = next_fmt {
             // I don't think octal and hexadecimal integers are supported in list-directed input.
-            let substr = self.next_list_directed_substring()?;
+            let substr = self.next_list_directed_substring(false)?;
             let v = parsing::parse_integer(substr)?;
             visitor.visit_i64(v)
         } else {
@@ -595,7 +616,7 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
                 visitor.visit_u64(v)
             } else if let FortField::Any = next_fmt {
                 // I don't think octal and hexadecimal integers are supported in list-directed input.
-                let substr = self.next_list_directed_substring()?;
+                let substr = self.next_list_directed_substring(false)?;
                 let v = parsing::parse_unsigned_integer(substr)?;
                 visitor.visit_u64(v)
             } else {
@@ -636,15 +657,9 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
             visitor.visit_f64(v)
         } else if let FortField::Any = next_fmt {
             // Fortran format allows padding with spaces, but Rust does not, hence the trim()
-            let substr = self.next_list_directed_substring()?.trim();
-            let res = if substr.contains("d") || substr.contains("D") {
-                let valstr = substr.replace("d", "e").replace("D", "E");
-                valstr.parse::<f64>()
-            } else {
-                substr.parse::<f64>()
-            };
-
-            let v = res.map_err(|e| FError::ParsingError { s: substr.to_string(), t: "real", reason: format!("Invalid real number format ({e})") })?;
+            let substr = self.next_list_directed_substring(false)?.trim();
+            let v = parsing::parse_any_real(substr)?;
+            
             // Unlike with fixed format, there's no edge case of values being multiplied
             // by a power of 10.
             visitor.visit_f64(v)
@@ -669,7 +684,7 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
                 Err(DError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char (requires 'a' or 'a1' Fortran format)", field_name: self.try_prev_field().map(|f| f.to_string()) })
             },
             FortField::Any => {
-                let s: Vec<char> = self.next_list_directed_substring()?
+                let s: Vec<char> = self.next_list_directed_substring(false)?
                     .chars()
                     .collect();
                 if s.len() != 1 {
@@ -700,7 +715,7 @@ impl<'de, 'a, F: AsRef<str>> de::Deserializer<'de> for &'a mut Deserializer<'de,
                 visitor.visit_borrowed_str(s)
             }
         } else if let FortField::Any = next_fmt {
-            let s = self.next_list_directed_substring()?;
+            let s = self.next_list_directed_substring(false)?;
             if self.settings.trim_strings {
                 visitor.visit_borrowed_str(s.trim())
             } else {
@@ -1429,6 +1444,8 @@ mod tests {
     fn test_list_de_structs() -> DResult<()> {
         let ff = FortFormat::ListDirected;
 
+        // All three tests in this function are based on a real use case in GGG code
+        // First test: a structure where all fields are expected to be provided.
         #[derive(Debug, Deserialize, PartialEq)]
         struct InsituCorr<'a> {
             #[serde(rename="Gas")]
@@ -1437,7 +1454,7 @@ mod tests {
             aicf: f64,
             #[serde(rename="AICF_Err")]
             aicf_err: f64,
-            #[serde(rename="WMO_SCale")]
+            #[serde(rename="WMO_Scale")]
             wmo_scale: &'a str
         }
 
@@ -1454,10 +1471,11 @@ mod tests {
             wmo_scale: "WMO CO2 X2007",
         };
 
-        assert_eq!(s1de, s1true);
+        assert_eq!(s1de, s1true, "Deserialized InsituCorr test structure produced different values than expected.");
 
-        return Ok(());
 
+        // Second test: a structure where the last fields may be omitted, but in this
+        // case they are provided.
         #[derive(Debug, Deserialize, PartialEq)]
         struct AirmassCorr<'a> {
             #[serde(rename="Gas")]
@@ -1484,7 +1502,7 @@ mod tests {
             p: Some(4.0)
         };
 
-        assert_eq!(s2de, s2true);
+        assert_eq!(s2de, s2true, "Deserializing AirmassCorr with the g and p values produced different values than expected.");
 
         Ok(())
     }

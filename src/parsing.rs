@@ -24,6 +24,21 @@ pub(crate) fn parse_unsigned_integer(s: &str) -> FResult<u64> {
     Ok(val.parse().unwrap())
 }
 
+pub(crate) fn parse_any_real(s: &str) -> FResult<f64> {
+    let res = if s.contains("d") || s.contains("D") {
+        let valstr = s.replace("d", "e").replace("D", "E");
+        valstr.parse::<f64>()
+    } else {
+        s.parse::<f64>()
+    };
+
+    res.map_err(|e| FError::ParsingError {
+        s: s.to_string(),
+        t: "real",
+        reason: format!("Invalid real number format ({e})")
+    })
+}
+
 
 /// Get the value expression out of a string, ignoring leading whitespace.
 /// 
