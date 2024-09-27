@@ -1436,6 +1436,52 @@ mod tests {
     }
 
     #[test]
+    fn test_middle_opt_field() -> DResult<()> {
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct Test {
+            a: i32,
+            b: Option<i32>,
+            c: i32
+        }
+
+        let ff = FortFormat::parse("(i2,i2)")?;
+        let fields = ["a", "c"];
+        let data = " 1 2";
+        let s: Test = from_str_with_fields(&data, &ff, &fields)?;
+        
+        let expected = Test { a: 1, b: None, c: 2 };
+        assert_eq!(s, expected, "Deserializing struct with missing optional field failed with fixed format");
+
+        let s: Test = from_str_with_fields(&data, &FortFormat::ListDirected, &fields)?;
+        assert_eq!(s, expected, "Deserializing struct with missing optional field failed with list-directed format");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_middle_opt_field_missing_by_name() -> DResult<()> {
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct Test {
+            a: i32,
+            b: Option<i32>,
+            c: i32
+        }
+
+        let ff = FortFormat::parse("(i2,1x,a4,1x,i2)")?;
+        let fields = ["a", "skip", "c"];
+        let data = "10 abcd 20";
+        let s: Test = from_str_with_fields(&data, &ff, &fields)?;
+        
+        let expected = Test { a: 10, b: None, c: 20 };
+        assert_eq!(s, expected, "Deserializing struct with missing optional field failed with fixed format");
+
+        let s: Test = from_str_with_fields(&data, &FortFormat::ListDirected, &fields)?;
+        assert_eq!(s, expected, "Deserializing struct with missing optional field failed with list-directed format");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_de_scalar_fort_value() -> DResult<()> {
         let v: FortValue = from_str("T", &FortFormat::parse("(l1)")?)?;
         assert_eq!(v, FortValue::Logical(true));
