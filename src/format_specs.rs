@@ -1,5 +1,20 @@
 //! Represent Fortran formats as Rust types.
 //! 
+//! Fortran formats exist in two types: fixed and list-directed.
+//! Fixed formats specify the syntax and width of each field in the input string,
+//! for example "(a4,1x,i5.2)". Fixed formats read or write data based on the
+//! number of characters in the format. The example "(a4,1x,i5.2)" would read in
+//! the first four characters as a string (a4), skip one character (1x), and read
+//! in five more characters as an integer (i5). When writing, each field will always
+//! take up the number of characters specified by the with (4 and 5 in the given example).
+//! If a value requires more characters to write than it is provided, it will be
+//! output as a series of `*`.
+//! 
+//! List directed formats do not have predefined widths. Instead, fields are separated
+//! by whitespace, commas, or both. Strings that contain these separators must be enclosed
+//! in strings to be parsed as a single element. Additionally, list directed formats cannot
+//! handle octal- or hexadecial- formatted integers nor scaled floating point values.
+//! 
 //! The first step in working with a Fortran format string such as "(a4,1x,i5.2)"
 //! is to parse it into a [`FortFormat`] with its `parse` method:
 //! 
@@ -8,10 +23,22 @@
 //! let ff = FortFormat::parse("(a4,1x,i5.2)").unwrap();
 //! ```
 //! 
-//! From there, this can be used for [deserialization](crate::de) or 
-//! [serialization](crate::ser), or you can inspect
-//! the fields directly with the `into_fields`, `iter_fields`, and `iter_non_skip_fields`
-//! methods on [`FortFormat`].
+//! List directed format is represented in a Fortran read or write statement
+//! by a `*`, so parsing an `*` returns a list directed format:
+//! 
+//! ```
+//! # use fortformat::format_specs::FortFormat;
+//! let ff = FortFormat::parse("*").unwrap();
+//! assert!(ff.is_list_directed());
+//! ```
+//! 
+//! However, if you know that the format is list directed, you can
+//! construct [`FortFormat::ListDirected`] directly, without parsing.
+//! 
+//! Once you have a [`FortFormat`] instance, it can be used for 
+//! [deserialization](crate::de) or [serialization](crate::ser),
+//! or you can inspect the fields directly with the `into_fields`,
+//! `iter_fields`, and `iter_non_skip_fields` methods on [`FortFormat`].
 use std::fmt::Display;
 
 use pest::{Parser, iterators::Pair, RuleType};
@@ -337,6 +364,14 @@ pub enum FortFormat {
 }
 
 impl FortFormat {
+    pub fn is_list_directed(&self) -> bool {
+        if let Self::ListDirected = self {
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn get_field(&self, index: usize) -> Option<&FortField> {
         match self {
             FortFormat::Fixed(vec) => vec.get(index),
@@ -355,7 +390,7 @@ impl FortFormat {
         if fmt_str.trim() == "*" {
             return Ok(Self::ListDirected);
         }
-        
+
         let mut fields = vec![];
         let tree = FortParser::parse(Rule::format, fmt_str)?.next().unwrap();
 

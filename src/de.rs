@@ -67,6 +67,60 @@
 //! assert_eq!(p, Person{name: "John Doe".to_string(), age: 30, weight: 180.5});
 //! ```
 //! 
+//! # Deserializing optional values
+//! 
+//! Fortran does not have the concept of a null value. When reading in data, if the input
+//! ends before all the input variables have been populated, they will either have their previous
+//! value or the program will crash:
+//! 
+//! ```fortran
+//! program reading
+//! 
+//! implicit none
+//! 
+//! integer*4 x, y, z
+//! character*16 s
+//! 
+//! x = -99
+//! y = -99
+//! z = -99
+//! 
+//! ! A slash indicates the end of input to parse
+//! s = '1 2 / 3'
+//! read(s, *) x, y, z
+//! write(*,*) 'z = ', z  ! z will still be -99
+//! 
+//! s = '4 5'
+//! read(s, *), x, y, z
+//! ! crashes with "End of file" error
+//! 
+//! end program
+//! ```
+//! 
+//! For this crate, we treat both cases more consistently: if `z` is an `Option`,
+//! then in both cases it will be a `None`. If it is not an `Option`, then parsing
+//! either string will result in an error:
+//! 
+//! ```
+//! use fortformat::format_specs::FortFormat;
+//! use fortformat::de::from_str;
+//! use fortformat::serde_common::DError;
+//! 
+//! let ff = FortFormat::ListDirected;
+//! let (x, y, z): (i32, i32, Option<i32>) = from_str("1 2 / 3", &ff).unwrap();
+//! assert_eq!(x, 1);
+//! assert_eq!(y, 2);
+//! assert_eq!(z, None);
+//! 
+//! let (x, y, z): (i32, i32, Option<i32>) = from_str("4 5", &ff).unwrap();
+//! assert_eq!(x, 4);
+//! assert_eq!(y, 5);
+//! assert_eq!(z, None);
+//! 
+//! let res: Result<(i32, i32, i32), _> = from_str("7 8", &ff);
+//! assert!(res.is_err())
+//! ```
+//! 
 //! # Deserializing nested structures
 //! 
 //! ## Known data order
