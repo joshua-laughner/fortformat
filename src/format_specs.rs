@@ -408,6 +408,7 @@ pub enum FortFormat {
 }
 
 impl FortFormat {
+    /// Returns `true` if this is the `ListDirected` variant.
     pub fn is_list_directed(&self) -> bool {
         if let Self::ListDirected = self {
             true
@@ -416,6 +417,13 @@ impl FortFormat {
         }
     }
 
+    /// Get a reference to one of the fields in this format by index.
+    /// 
+    /// Note that `index` is 0-based.
+    /// 
+    /// # Returns
+    /// `None` if the index is too large or this is a list-directed format,
+    /// `Some` with a reference to the field otherwise.
     pub fn get_field(&self, index: usize) -> Option<&FortField> {
         match self {
             FortFormat::Fixed(vec) => vec.get(index),
@@ -423,11 +431,41 @@ impl FortFormat {
         }
     }
 
+    /// Replace the existing field at `index` with a the new value `field`.
+    /// 
+    /// # Returns
+    /// An error if `index` is greater than or equal to the number of fields (since `index`
+    /// is 0-based), or if this is a list-directed format. Note the difference between this
+    /// and [`Self::insert_field`], whereas `insert_field` allows `index` to equal the number
+    /// of fields (to act as a push), this does not.
     pub fn set_field(&mut self, index: usize, field: FortField) -> Result<(), FieldIndexError>{
         match self {
             FortFormat::Fixed(vec) => {
                 if index < vec.len() {
                     vec[index] = field;
+                    Ok(())
+                } else {
+                    Err(FieldIndexError::IndexOutOfRange { index, len: vec.len() })
+                }
+            },
+            FortFormat::ListDirected => Err(FieldIndexError::IsListDirected),
+        }
+    }
+
+    /// Insert a new field into the format at index.
+    /// 
+    /// This follows the convention for [`Vec::insert`] that the new field will be at `index`
+    /// and all existing fields at `index` or greater are shifted right. If `index` equals the
+    /// length of the vector of fields, then this acts like [`Vec::push`], adding the new field
+    /// to the end of the format.
+    /// 
+    /// # Returns
+    /// An error if `index` is greater than the number of fields or this is a list-directed format.
+    pub fn insert_field(&mut self, index: usize, field: FortField) -> Result<(), FieldIndexError> {
+        match self {
+            FortFormat::Fixed(vec) => {
+                if index <= vec.len() {
+                    vec.insert(index, field);
                     Ok(())
                 } else {
                     Err(FieldIndexError::IndexOutOfRange { index, len: vec.len() })
@@ -1010,6 +1048,36 @@ mod tests {
 
         let mut ff2 = FortFormat::ListDirected;
         let res = ff2.set_field(0, FortField::Skip);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_insert_field() {
+        let mut ff = FortFormat::parse("(i2,f13.8)").unwrap();
+        assert_eq!(ff.get_field(0), Some(&FortField::Integer { width: 2, zeros: None, base: IntBase::Decimal }));
+        assert_eq!(ff.get_field(1), Some(&FortField::Real { width: 13, precision: Some(8), fmt: RealFmt::F, scale: 0 }));
+
+        // Test insertion at the beginning
+        ff.insert_field(0, FortField::Char { width: Some(9) }).unwrap();
+        assert_eq!(ff.get_field(0), Some(&FortField::Char { width: Some(9) }));
+        assert_eq!(ff.get_field(1), Some(&FortField::Integer { width: 2, zeros: None, base: IntBase::Decimal }));
+        assert_eq!(ff.get_field(2), Some(&FortField::Real { width: 13, precision: Some(8), fmt: RealFmt::F, scale: 0 }));
+
+        // Test adding to the end
+        let mut ff = FortFormat::parse("(i2,f13.8)").unwrap();
+        ff.insert_field(2, FortField::Char { width: Some(9) }).unwrap();
+        assert_eq!(ff.get_field(0), Some(&FortField::Integer { width: 2, zeros: None, base: IntBase::Decimal }));
+        assert_eq!(ff.get_field(1), Some(&FortField::Real { width: 13, precision: Some(8), fmt: RealFmt::F, scale: 0 }));
+        assert_eq!(ff.get_field(2), Some(&FortField::Char { width: Some(9) }));
+
+        // Test that adding past the end produces an error
+        let mut ff = FortFormat::parse("(i2,f13.8)").unwrap();
+        let res = ff.set_field(3, FortField::Skip);
+        assert!(res.is_err());
+
+        // Test that adding to a list directed format produces an error
+        let mut ff = FortFormat::ListDirected;
+        let res = ff.set_field(0, FortField::Skip);
         assert!(res.is_err());
     }
 }
