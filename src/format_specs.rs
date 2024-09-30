@@ -63,6 +63,28 @@ impl Display for PError {
     }
 }
 
+/// Represents an error indexing into a list of fields
+#[derive(Debug)]
+pub enum FieldIndexError {
+    IndexOutOfRange{index: usize, len: usize},
+    IsListDirected,
+}
+
+impl Display for FieldIndexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FieldIndexError::IndexOutOfRange { index, len } => {
+                write!(f, "index {index} is out of range for a FortFormat instance with {len} fields")
+            },
+            FieldIndexError::IsListDirected => {
+                write!(f, "cannot index into a FortFormat::ListDirected instance")
+            },
+        }
+    }
+}
+
+impl std::error::Error for FieldIndexError {}
+
 #[derive(Parser)]
 #[grammar = "fort.pest"]
 pub(crate) struct FortParser;
@@ -398,6 +420,20 @@ impl FortFormat {
         match self {
             FortFormat::Fixed(vec) => vec.get(index),
             FortFormat::ListDirected => Some(&FortField::Any),
+        }
+    }
+
+    pub fn set_field(&mut self, index: usize, field: FortField) -> Result<(), FieldIndexError>{
+        match self {
+            FortFormat::Fixed(vec) => {
+                if index < vec.len() {
+                    vec[index] = field;
+                    Ok(())
+                } else {
+                    Err(FieldIndexError::IndexOutOfRange { index, len: vec.len() })
+                }
+            },
+            FortFormat::ListDirected => Err(FieldIndexError::IsListDirected),
         }
     }
 
@@ -959,5 +995,21 @@ mod tests {
         let s = "(a1,a57,1x,2i4,f8.4,f8.3,f9.3,2f8.3,1x,f6.4,f8.3,f7.3,f7.2,3(1x,f5.4),2i9,1x,f14.11,i9,i3,1x,f5.3,i5,1x,a2,2(f6.1,f8.2,f5.1),f7.1,f7.4,f6.1,f6.0,f10.3,f7.0,f7.3)";
         FortFormat::parse(s)?;
         Ok(())
+    }
+
+    #[test]
+    fn test_set_field() {
+        let mut ff1 = FortFormat::parse("(i2)").unwrap();
+        assert_eq!(ff1.get_field(0), Some(&FortField::Integer { width: 2, zeros: None, base: IntBase::Decimal }));
+
+        ff1.set_field(0, FortField::Char { width: Some(9) }).unwrap();
+        assert_eq!(ff1.get_field(0), Some(&FortField::Char { width: Some(9) }));
+
+        let res = ff1.set_field(1, FortField::Skip);
+        assert!(res.is_err());
+
+        let mut ff2 = FortFormat::ListDirected;
+        let res = ff2.set_field(0, FortField::Skip);
+        assert!(res.is_err());
     }
 }
