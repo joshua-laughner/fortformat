@@ -39,8 +39,9 @@
 //! [deserialization](crate::de) or [serialization](crate::ser),
 //! or you can inspect the fields directly with the `into_fields`,
 //! `iter_fields`, and `iter_non_skip_fields` methods on [`FortFormat`].
-use std::fmt::Display;
+use std::fmt::{Display, Write};
 
+use itertools::Itertools;
 use pest::{Parser, iterators::Pair, RuleType};
 
 type PResult<T> = std::result::Result<T, PError>;
@@ -207,12 +208,14 @@ impl FortField {
         }
     }
 
+    /// Returns the number of bytes required by this field. Only returns `None` if the field type is `Any`,
+    /// meaning list-directed format.
     pub fn width(&self) -> Option<u32> {
         match self {
             FortField::Char { width } => Some(width.unwrap_or(1)),
             FortField::Logical { width } => Some(*width),
-            FortField::Integer { width, zeros, base } => Some(*width),
-            FortField::Real { width, precision, fmt, scale } => Some(*width),
+            FortField::Integer { width, zeros: _, base: _ } => Some(*width),
+            FortField::Real { width, precision: _, fmt: _, scale: _ } => Some(*width),
             FortField::Any => None,
             FortField::Skip => Some(1),
         }
@@ -235,10 +238,8 @@ impl FortField {
             FortField::Skip => None,
         }
     }
-}
 
-impl Display for FortField {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn display_helper<W: std::fmt::Write>(&self, include_scale: bool, mut f: W) -> std::fmt::Result {
         match self {
             FortField::Char { width } => write!(f, "a{}", width.unwrap_or(1)),
             FortField::Logical { width } => write!(f, "l{width}"),
@@ -250,7 +251,7 @@ impl Display for FortField {
                 }
             },
             FortField::Real { width, precision, fmt, scale } => {
-                let p = if scale == &0 { "".to_owned() } else { format!("{scale}p") };
+                let p = if scale == &0 || !include_scale { "".to_owned() } else { format!("{scale}p") };
 
                 if let Some(m) = precision {
                     write!(f, "{p}{fmt}{width}.{m}")
@@ -261,6 +262,27 @@ impl Display for FortField {
             FortField::Any => write!(f, "*"),
             FortField::Skip => write!(f, "x"),
         }
+    }
+
+    fn as_str_and_scale(&self) -> (String, Option<i32>) {
+        let scale = match self {
+            FortField::Char { width } => None,
+            FortField::Logical { width } => None,
+            FortField::Integer { width, zeros, base } => None,
+            FortField::Real { width, precision, fmt, scale } => Some(*scale),
+            FortField::Skip => None,
+            FortField::Any => None,
+        };
+        let mut s = String::new();
+        self.display_helper(false, &mut s)
+            .expect("writing to a string should not fail");
+        (s, scale)
+    }
+}
+
+impl Display for FortField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.display_helper(true, f)
     }
 }
 
@@ -523,6 +545,93 @@ impl FortFormat {
         // TODO: cache this somehow?
         let n = self.iter_non_pos_fields().count();
         n
+    }
+
+    /// Return a series of tuples containing fields and the number of times they
+    /// are repeated consecutively.
+    /// 
+    /// See [`Self::fmt_string`] for how `max_group_len` works, as this is the
+    /// underlying grouping function that enables that.
+    /// 
+    /// # Developer note
+    /// This function is private for now because enabling larger groups will
+    /// require a change in the output type. After that is implemented, this
+    /// can be made part of the public interface.
+    fn collapsed_version(&self, max_group_len: usize) -> Vec<(u32, FortField)> {
+        // For now, we won't handle repeated groups, but what I think that would involve
+        // is, after we do the first reduction of adjacent identical fields, then we do a
+        // number of iterations up to the max_group_len and see if grouping different sections
+        // of the format string by a given group size reduces the length further.
+        let it = self.iter_fields().map(|f| (1, f.to_owned()));
+        if max_group_len == 0 {
+            // Special case - don't group
+            return it.collect();
+        }
+
+        let one_grouped = it.coalesce(|(n, prev_fmt), (m, curr_fmt)| {
+            if prev_fmt == curr_fmt {
+                Ok((n + 1, prev_fmt))
+            } else {
+                Err(( (n, prev_fmt), (m, curr_fmt) ))
+            }
+        });
+
+        one_grouped.collect()
+
+        // TODO: if max_group_len > 1, do higher-order grouping
+    }
+
+    /// Create a Fortran-compatible format string from this instance, grouping like format specifiers.
+    /// 
+    /// The `max_group_len` parameter controls the group size. A value of `0` will not group any
+    /// terms, so every field in this format will have its own entry in the string. A value of `1`
+    /// will group identical terms, for example, three "f13.8" fields in a row become "3f13.8".
+    /// At present, values >1 do the same, but eventually the plan is to allow this function to
+    /// find repeated sets of fields, where if (for example), grouping adjacent identical fields
+    /// left you with "a2,1x,f13.8" repeated four times, then a `max_group_len >= 3` should produce
+    /// "4(a2,1x,f13.8)".
+    pub fn fmt_string(&self, max_group_len: usize) -> String {
+        let mut fmt_str = "(".to_string();
+        let mut curr_scale = 0;
+        let mut first_el = true;
+        for (rep, fmt_el) in self.collapsed_version(max_group_len) {
+            let (el_str, next_scale) = fmt_el.as_str_and_scale();
+            let include_scale = if let Some(s) = next_scale {
+                if s == curr_scale {
+                    false
+                } else {
+                    curr_scale = s;
+                    true
+                }
+            } else {
+                false
+            };
+
+            let include_rep = rep != 1 || fmt_el.is_positional();
+
+            if first_el {
+                first_el = false;
+            } else {
+                fmt_str.push(',');
+            }
+
+            // If we need to write the scale, e.g. "1pe13.5" and a number of repetitions
+            // then we need parentheses around the format to separate the scale and the reps,
+            // e.g. "10(1pe13.5)"
+            if include_rep && include_scale {
+                write!(&mut fmt_str, "{rep}({curr_scale}p").expect("writing to a string should not fail");
+            } else if include_rep {
+                write!(&mut fmt_str, "{rep}").expect("writing to a string should not fail");
+            }
+
+            write!(&mut fmt_str, "{el_str}").expect("writing to a string should not fail");
+            
+            if include_rep && include_scale {
+                write!(&mut fmt_str, ")").expect("writing to a string should not fail");
+            }
+        }
+        fmt_str.push(')');
+        fmt_str
     }
 }
 
@@ -806,6 +915,42 @@ mod tests {
         let expected = expected.repeat(3);
 
         assert_eq!(v, expected, "Parsing {s} failed");
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_by_one() -> PResult<()> {
+        let s = "(4i3,1x,a8,2x,2a4,1x,f13.8)";
+        let ff = FortFormat::parse(&s)?;
+        let grouped = ff.collapsed_version(1);
+        let expected = vec![
+            (4, FortField::Integer { width: 3, zeros: None, base: IntBase::Decimal }),
+            (1, FortField::Skip),
+            (1, FortField::Char { width: Some(8) }),
+            (2, FortField::Skip),
+            (2, FortField::Char { width: Some(4) }),
+            (1, FortField::Skip),
+            (1, FortField::Real { width: 13, precision: Some(8), fmt: RealFmt::F, scale: 0 })
+        ];
+        assert_eq!(grouped, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouped_fmt_str() -> PResult<()> {
+        let sorig = "(4i3,1x,a8,2x,2a4,1x,f13.8)";
+        let ff = FortFormat::parse(&sorig)?;
+        let stest = ff.fmt_string(1);
+        assert_eq!(sorig, stest);
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouped_fmt_str_with_scale() -> PResult<()> {
+        let sorig = "(4i3,2x,42(1pe13.8))";
+        let ff = FortFormat::parse(&sorig)?;
+        let stest = ff.fmt_string(1);
+        assert_eq!(sorig, stest);
         Ok(())
     }
 

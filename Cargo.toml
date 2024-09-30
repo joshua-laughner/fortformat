@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 error-stack = "0.4.1"
+itertools = "0.11"
 pest = "2.5.3"
 pest_derive = "2.5.3"
 polars = {version = "0.35", default-features = false, features = ["rows", "fmt"], optional = true }
