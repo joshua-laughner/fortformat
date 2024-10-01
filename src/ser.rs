@@ -573,10 +573,10 @@ where T: ser::Serialize
 /// options. Pass `None` for `fields` if there are no field names to match up.  Note that
 /// calling without fields will require annotating the type F for the fields, so you would
 /// call this as `to_string_custom::<_, &str>(...)` in that case.
-pub fn to_bytes_custom<T, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: SerSettings) -> SResult<Vec<u8>> 
+pub fn to_bytes_custom<T, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: &SerSettings) -> SResult<Vec<u8>> 
 where T: ser::Serialize    
 {
-    let mut serializer = Serializer::new_custom(fmt, fields, &settings);
+    let mut serializer = Serializer::new_custom(fmt, fields, settings);
     value.serialize(&mut serializer)?;
     Ok(serializer.into_bytes())
 }
@@ -994,7 +994,8 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
             // TODO: I don't think this will work for fields that are themselves structures or maps. Will need
             // to iterate.
             let fortfmt = FortFormat::Fixed(vec![fmt]);
-            let bytes = to_bytes(value, &fortfmt)?;
+            // let bytes = to_bytes(value, &fortfmt)?;
+            let bytes = to_bytes_custom::<_, &str>(value, &fortfmt, None, self.settings)?;
             self.map_helper.data[offset] = Some(bytes);
         } else {
             panic!("serialize_key must be called before serialize_value when field names are given.");
@@ -2185,5 +2186,116 @@ mod tests {
         many_to_writer_custom(&values, &fmt, Some(&["b", "c", "a"]), &SerSettings::default(), &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s, "1 100.0 alpha\n2 200.0  beta\n3 300.0 gamma\n");
+    }
+
+    #[test]
+    fn test_string_justification() {
+        // There was a very tricky to find bug that meant some fields were not respecting left-alignment
+        // settings, this test has a lot of the cases I went through to find it.
+
+        // First, check that a simple sequence respects left-alignment.
+        let fmt = FortFormat::parse("(a8,i2)").unwrap();
+        let values = ("abcde", 42);
+        let settings = SerSettings::default().align_left_str(true);
+        let s = to_string_custom::<_, &str>(values, &fmt, None, &settings).unwrap();
+        assert_eq!(s, "abcde   42");
+
+        // Then a struct with a str ref - for each struct we'll test serializing to both a string and a writer,
+        // with and without field names specified. (The original bug was that settings weren't passed when field
+        // names were given.)
+        #[derive(Debug, serde::Serialize)]
+        struct Test1 {
+            s: &'static str,
+            n: i32
+        }
+
+        let values = Test1{ s: "abcde", n: 42 };
+        let s = to_string_custom::<_, &str>(&values, &fmt, None, &settings).unwrap();
+        assert_eq!(s, "abcde   42");
+
+        let s = to_string_custom::<_, &str>(&values, &fmt, Some(&["s", "n"]), &settings).unwrap();
+        assert_eq!(s, "abcde   42");
+
+        let mut buf = vec![];
+        to_writer_custom::<_, _, &str>(&values, &fmt, None, &settings, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "abcde   42\n");
+
+        let mut buf = vec![];
+        to_writer_custom::<_, _, &str>(&values, &fmt, Some(&["s", "n"]), &settings, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "abcde   42\n");
+
+        // Next a struct with the string as an owned string
+        #[derive(Debug, serde::Serialize)]
+        struct Test2 {
+            s: String,
+            n: i32
+        }
+
+        let values = Test2{ s: "abcde".to_string(), n: 42 };
+        let s = to_string_custom::<_, &str>(&values, &fmt, None, &settings).unwrap();
+        assert_eq!(s, "abcde   42");
+
+        let s = to_string_custom::<_, &str>(&values, &fmt, Some(&["s", "n"]), &settings).unwrap();
+        assert_eq!(s, "abcde   42");
+
+        let mut buf = vec![];
+        to_writer_custom::<_, _, &str>(&values, &fmt, None, &settings, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "abcde   42\n");
+
+        let mut buf = vec![];
+        to_writer_custom::<_, _, &str>(&values, &fmt, Some(&["s", "n"]), &settings, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "abcde   42\n");
+
+        // Then a struct with the string on an inner, flattened struct.
+        #[derive(Debug, serde::Serialize)]
+        struct Test3 {
+            #[serde(flatten)]
+            inner: Test2
+        }
+
+        let values = Test3{ inner: values };
+        let s = to_string_custom::<_, &str>(&values, &fmt, None, &settings).unwrap();
+        assert_eq!(s, "abcde   42");
+
+        let s = to_string_custom::<_, &str>(&values, &fmt, Some(&["s", "n"]), &settings).unwrap();
+        assert_eq!(s, "abcde   42");
+
+        let mut buf = vec![];
+        to_writer_custom::<_, _, &str>(&values, &fmt, None, &settings, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "abcde   42\n");
+
+        let mut buf = vec![];
+        to_writer_custom::<_, _, &str>(&values, &fmt, Some(&["s", "n"]), &settings, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "abcde   42\n");
+
+        // Finally, confirm that a hash map (as opposed to a defined structure) behaves correctly.
+        let hfmt = FortFormat::parse("(a8,a2)").unwrap();
+        let values = HashMap::<_, _, std::hash::RandomState>::from_iter(vec![
+            ("s", "abcde"),
+            ("n", "42")
+        ]);
+
+        let s = to_string_custom::<_, &str>(&values, &hfmt, None, &settings).unwrap();
+        assert_eq!(s, "abcde   42");
+
+        let s = to_string_custom::<_, &str>(&values, &hfmt, Some(&["s", "n"]), &settings).unwrap();
+        assert_eq!(s, "abcde   42");
+
+        let mut buf = vec![];
+        to_writer_custom::<_, _, &str>(&values, &hfmt, None, &settings, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "abcde   42\n");
+
+        let mut buf = vec![];
+        to_writer_custom::<_, _, &str>(&values, &hfmt, Some(&["s", "n"]), &settings, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "abcde   42\n");
+
     }
 }
