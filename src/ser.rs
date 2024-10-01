@@ -1583,6 +1583,7 @@ pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precisi
 
 pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32, exp_ch: &str, n_exp_digits: Option<u32>) -> SResult<()> {
     let v_is_neg = v < 0.0;
+    let v_orig = v;
     let v = d2d(v);
     
     // This is complicated so some examples using e12.3 as the format
@@ -1600,7 +1601,35 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
     // Also as far as I can tell for spacing, a leading zero before the decimal is optional, but a negative
     // sign is not. so .314E+01 will fit in an 8-wide format, but not a 7-wide. (At 9-wide it gets the leading 0.)
     // If it's negative (-.314E+01), it needs at least 9 characters. At 10, it becomes -0.314E+01.
-    let mantissa = v.mantissa;
+
+    // Rounding is a pain: we have `precision` sig figs, plus `scale` (see above, by default, only the values
+    // after the decimal are used). Consider 3141.59 and its mantissa of 314159. The ilog10 of that will be 5,
+    // so ilog10 + 1 is how many digits the mantissa has. If we have `n` digits, then we need to round the mantissa
+    // to the nearest 10^n.
+    let n_digits_avail = ((precision as i32) + scale).max(0) as u32;
+    let n_digits_wanted = v.mantissa.ilog10() + 1;
+    let mantissa = if n_digits_wanted <= n_digits_avail || v.mantissa == 0 {
+        v.mantissa
+    } else {
+        let m = 10u64.pow(n_digits_wanted - n_digits_avail);
+        let r = v.mantissa % m;
+        let round_down = if r == m / 2 {
+            // Halfway case; always round towards the number that will be even in the least 
+            // significant remaining digit. E.g. if the mantissa is 31415 and we can have 4
+            // sig figs, then is the mantissa / m and modulo 2 (31415 / 10 = 3141 % 2 = 1) odd or even?
+            (v.mantissa / m) % 2 == 0
+        } else {
+            r < m / 2
+        };
+
+        let tmp = v.mantissa.checked_next_multiple_of(m)
+            .ok_or_else(|| SError::SerializationFailure(format!("overflow while rounding {v_orig}")))?;
+        if round_down {
+            tmp - m
+        } else {
+            tmp
+        }
+    };
     let mut b = itoa::Buffer::new();
     let s = b.format(mantissa);
     let m_bytes = s.as_bytes();
@@ -1886,7 +1915,7 @@ mod tests {
         let s = to_string(3.14, &fmt).unwrap();
         assert_eq!(s, "   3.140E+00");
         let s = to_string(3.1415, &fmt).unwrap();
-        assert_eq!(s, "   3.141E+00");
+        assert_eq!(s, "   3.142E+00"); // always round to the even least significant remaining digit
 
         let fmt = FortFormat::parse("(2pe12.3)").unwrap();
         let s = to_string(3.14, &fmt).unwrap();
@@ -1917,6 +1946,28 @@ mod tests {
         assert_eq!(s, "0.314E+01");
         let s = to_string(-3.14, &fmt).unwrap();
         assert_eq!(s, "-.314E+01");
+
+        // Test rounding up with various scaling
+        let fmt = FortFormat::parse("(-2pe13.5)").unwrap();
+        let s = to_string(0.999999, &fmt).unwrap();
+        assert_eq!(s, "  0.00100E+03");
+
+        let fmt = FortFormat::parse("(-1pe13.5)").unwrap();
+        let s = to_string(0.999999, &fmt).unwrap();
+        assert_eq!(s, "  0.01000E+02");
+
+        let fmt = FortFormat::parse("(e13.5)").unwrap();
+        let s = to_string(0.999999, &fmt).unwrap();
+        assert_eq!(s, "  0.10000E+01");
+
+        let fmt = FortFormat::parse("(1pe13.5)").unwrap();
+        let s = to_string(0.999999, &fmt).unwrap();
+        assert_eq!(s, "  9.99999E-01");
+
+        let fmt = FortFormat::parse("(2pe13.5)").unwrap();
+        let s = to_string(0.999999, &fmt).unwrap();
+        assert_eq!(s, "  99.9999E-02");
+
         // Don't have these implemented yet - format parsing needs to handle the eN at the end
         // let fmt = FortFormat::parse("(e12.3e1)").unwrap();
         // let s = to_string(3.14e5, &fmt).unwrap();
