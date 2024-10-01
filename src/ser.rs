@@ -1485,11 +1485,15 @@ pub(crate) fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
 
 pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32) -> SResult<()> {
     let v_is_neg = v < 0.0;
-    let v = if v == 0.0 {
+    let signed_prec = precision as i32;
+    let rv = (v * 10.0_f64.powi(signed_prec)).round_ties_even() * 10.0_f64.powi(-signed_prec);
+
+    let v = if rv == 0.0 {
         ryu_floating_decimal::FloatingDecimal64{ mantissa: 0, exponent: 0 }
     } else { 
-        d2d(v) 
+        d2d(rv) 
     };
+    
     let mut b = itoa::Buffer::new();
     let s = b.format(v.mantissa);
     let m_bytes = s.as_bytes();
@@ -1564,6 +1568,15 @@ pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precisi
         let c = m_bytes.get(i..i+1).unwrap_or(b"0");
         buf.write(c)?;
     }
+
+    // Edge case: all of the digits after the decimal are 0
+    if n_leading_digits + precision as usize == zeros_after_decimal {
+        buf.write(b".")?;
+        for _ in 0..zeros_after_decimal {
+            buf.write(b"0")?;
+        }
+    }
+
     Ok(())
 }
 
@@ -1822,6 +1835,14 @@ mod tests {
 
     #[test]
     fn test_real_f() {
+        let fmt = FortFormat::parse("(f9.4)").unwrap();
+        let s = to_string(8e-5, &fmt).unwrap();
+        assert_eq!(s, "   0.0001");
+
+        let fmt = FortFormat::parse("(f9.4)").unwrap();
+        let s = to_string(4e-5, &fmt).unwrap();
+        assert_eq!(s, "   0.0000");
+
         let fmt = FortFormat::parse("(f5.3)").unwrap();
         let s = to_string(-0.01, &fmt).unwrap();
         assert_eq!(s, "-.010");
@@ -2275,22 +2296,15 @@ mod tests {
         assert_eq!(s, "abcde   42\n");
 
         // Finally, confirm that a hash map (as opposed to a defined structure) behaves correctly.
+        // Can't reliably test without field names specified because HashMaps are unordered.
         let hfmt = FortFormat::parse("(a8,a2)").unwrap();
         let values = HashMap::<_, _, std::hash::RandomState>::from_iter(vec![
             ("s", "abcde"),
             ("n", "42")
         ]);
 
-        let s = to_string_custom::<_, &str>(&values, &hfmt, None, &settings).unwrap();
-        assert_eq!(s, "abcde   42");
-
         let s = to_string_custom::<_, &str>(&values, &hfmt, Some(&["s", "n"]), &settings).unwrap();
         assert_eq!(s, "abcde   42");
-
-        let mut buf = vec![];
-        to_writer_custom::<_, _, &str>(&values, &hfmt, None, &settings, &mut buf).unwrap();
-        let s = String::from_utf8(buf).unwrap();
-        assert_eq!(s, "abcde   42\n");
 
         let mut buf = vec![];
         to_writer_custom::<_, _, &str>(&values, &hfmt, Some(&["s", "n"]), &settings, &mut buf).unwrap();
