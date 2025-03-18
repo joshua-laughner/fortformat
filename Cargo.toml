@@ -12,6 +12,8 @@ keywords = ["fortran", "data", "serde", "science", "STEM"]
 categories = ["parsing", "science", "value-formatting"]
 exclude = ["fortran/*", ".vscode/*"]
 
+[package.metadata.docs.rs]
+all-features = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

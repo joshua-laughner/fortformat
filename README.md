@@ -1,5 +1,7 @@
 # FortFormat
 
+![Crates.io Version](https://img.shields.io/crates/v/fortformat)
+
 A Rust parser for Fortran format strings.
 
 Copyright 2024, by the California Institute of Technology.
