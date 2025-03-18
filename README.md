@@ -21,6 +21,8 @@ The purpose of this crate is to handle parsing these Fortran format specificatio
 
 ## Usage
 
+Minimum supported Rust version is currently 1.63.0.
+
 Add this as a dependency to your project with `cargo add fortformat` or directly adding the following to your `Cargo.toml`:
 
 ```toml
