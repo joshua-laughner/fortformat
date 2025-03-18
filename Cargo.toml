@@ -2,6 +2,12 @@
 name = "fortformat"
 version = "0.1.0"
 edition = "2021"
+authors = ["Joshua Laughner <jllacct119@gmail.com>"]
+license = "Apache-2.0"
+homepage = "https://github.com/joshua-laughner/fortformat"
+repository = "https://github.com/joshua-laughner/fortformat"
+readme = "README.md"
+description = "Parse Fortran format strings and formatted data"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

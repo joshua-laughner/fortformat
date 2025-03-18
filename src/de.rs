@@ -1394,7 +1394,7 @@ mod tests {
             &fields
         );
 
-        // Note: I wrote this to test for an error because as or 2023-10-20 I'm assuming that
+        // Note: I wrote this to test for an error because as of 2023-10-20 I'm assuming that
         // serde will try to deserialize something for the "coords" field itself, and there's
         // no way to tell the Fortran deserializer that it shouldn't advance the format & field
         // indices in that case (without using the #[serder(flatten)] tag). But this deserialization
