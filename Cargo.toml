@@ -8,6 +8,8 @@ homepage = "https://github.com/joshua-laughner/fortformat"
 repository = "https://github.com/joshua-laughner/fortformat"
 readme = "README.md"
 description = "Parse Fortran format strings and formatted data"
+keywords = ["fortran", "data", "serde", "science", "STEM"]
+categories = ["parsing", "science", "value-formatting"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
