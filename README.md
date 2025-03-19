@@ -1,6 +1,7 @@
 # FortFormat
 
-![Crates.io Version](https://img.shields.io/crates/v/fortformat)
+[![crates.io](https://img.shields.io/crates/v/fortformat "crates.io")](https://crates.io/crates/fortformat)
+[![docs.rs](https://img.shields.io/docsrs/fortformat?logo=docsdotrs "docs.rs")](https://docs.rs/fortformat/latest/fortformat/)
 
 A Rust parser for Fortran format strings.
 
