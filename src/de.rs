@@ -1343,6 +1343,30 @@ mod tests {
     }
 
     #[test]
+    fn test_de_struct_with_default() -> DResult<()> {
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct Test {
+            #[serde(default)]
+            alpha: i32,
+            beta: f64,
+            #[serde(default)]
+            gamma: String
+        }
+
+        let ff = FortFormat::parse("(f5.3)")?;
+        let fields = ["beta"];
+        let s: Test = from_str_with_fields(
+            "9.876", 
+            &ff, 
+            &fields
+        )?;
+
+        assert_eq!(s, Test{ alpha: 0, beta: 9.876, gamma: "".to_string() });
+
+        Ok(())
+    }
+
+    #[test]
     fn test_de_struct_with_inner_struct() -> DResult<()> {
         #[derive(Debug, PartialEq, Deserialize)]
         struct Inner {

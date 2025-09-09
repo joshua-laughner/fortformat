@@ -88,7 +88,7 @@
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string;
-//!
+//! #
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct SiteInfo {
 //!     name: String,
@@ -149,7 +149,7 @@
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string_with_fields;
-//!
+//! #
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct SiteInfo {
 //!     name: String,
@@ -180,7 +180,7 @@
 //! # use std::collections::HashMap;
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string_with_fields;
-//!
+//! #
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct SiteInfo {
 //!     name: String,
@@ -214,7 +214,7 @@
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string_with_fields;
-//!
+//! #
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct Coordinates {
 //!     longitude: f32,
@@ -298,6 +298,72 @@
 //! At present, there is no way to tell it to "loop" the field names (i.e. you cannot pass just
 //! `["latitude", "longitude"]` for `fields` in the above example - it must have 4 elements matching
 //! 4 total fields).
+//!
+//! ## Omitting some fields
+//!
+//! It is possible to skip serializing certain fields in a struct or keys in a map with the list of fields
+//! passed to one of the `to_*_custom` functions. By default, if you tried to serialize a structure with
+//! one or more of its fields missing from the list of fields, the result would be an error (specifically,
+//! an [`SError::FieldMissingError`]):
+//!
+//! ```
+//! # use std::collections::HashMap;
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::to_string_with_fields;
+//! # use fortformat::SError;
+//! #
+//! #[derive(Debug, PartialEq, serde::Serialize)]
+//! struct SiteInfo {
+//!     name: &'static str,
+//!     latitude: f32,
+//!     longitude: f32
+//! }
+//!
+//! let ff = FortFormat::parse("(f8.4,1x,f9.4)").unwrap();
+//! let value = SiteInfo{ name: "Primary", latitude: 45.0, longitude: -90.0 };
+//! let fields = ["longitude", "latitude"];
+//! let res = to_string_with_fields(value, &ff, &fields);
+//!
+//! if let Err(SError::FieldMissingError(_)) = res {
+//!     // this is what we expect
+//! } else {
+//!     assert!(false, "got {res:?}");
+//! }
+//! ```
+//!
+//! This is the default behavior because the typical expectation in `serde` crates is that
+//! if you are serializing a struct or map, you want to serialize its entirety. If you do
+//! want to skip a field, `serde` has the various [`skip` field attributes](https://serde.rs/field-attrs.html#skip).
+//!
+//! However, if you need to programmatically decide whether to skip a field based on information
+//! not contained in the field being serialized, that is not possible with those field attributes.
+//! If you wish to use the list of fields to serialize only a subset, you can use one of the
+//! `*_custom` functions with a [`SerSettings`] instance with `allow_skipped_fields` set to `true`:
+//!
+//! ```
+//! # use std::collections::HashMap;
+//! # use fortformat::format_specs::FortFormat;
+//! # use fortformat::ser::{to_string_custom, SerSettings};
+//! # use fortformat::SError;
+//! #
+//! # #[derive(Debug, PartialEq, serde::Serialize)]
+//! # struct SiteInfo {
+//! #     name: &'static str,
+//! #     latitude: f32,
+//! #     longitude: f32
+//! # }
+//!
+//! let settings = SerSettings::default().allow_skipped_fields(true);
+//! let ff = FortFormat::parse("(f9.4,1x,f8.4)").unwrap();
+//! let value = SiteInfo{ name: "Primary", latitude: 45.0, longitude: -90.0 };
+//! let fields = ["longitude", "latitude"];
+//! let s = to_string_custom(value, &ff, Some(&fields), &settings).unwrap();
+//! assert_eq!(s, " -90.0000  45.0000");
+//! ```
+//!
+//! Of course, if you omit a field during serialization in this way, you will need
+//! to allow for that field to be missing if you need to deserialize the data again
+//! later.
 //!
 //! # Strings and the format spec
 //!
@@ -489,6 +555,7 @@ static DEFAULT_SER_SETTINGS: SerSettings = SerSettings {
     fill_method: NoneFill::default_inner(),
     newline: b"\n",
     align_left_str: false,
+    allow_skipped_fields: false,
 };
 
 /// Serialize a value into a string using the given Fortran format.
@@ -742,6 +809,7 @@ pub struct SerSettings {
     fill_method: NoneFill,
     newline: &'static [u8],
     align_left_str: bool,
+    allow_skipped_fields: bool,
 }
 
 impl Default for SerSettings {
@@ -786,12 +854,41 @@ impl SerSettings {
         self.align_left_str = align_left;
         self
     }
+
+    /// If a list of field names was provided to set the field order,
+    /// the default behavior (`false`, here) is to require that all
+    /// fields in the struct or keys in the map are provided in that
+    /// list. Setting this to `true` means that the fields not included
+    /// in the list will simply be skipped, rather than causing an error.
+    pub fn allow_skipped_fields(mut self, allow: bool) -> Self {
+        self.allow_skipped_fields = allow;
+        self
+    }
+}
+
+/// Used to keep track of whether the position for the next field
+/// has been set by indexing the keys.
+#[derive(Debug)]
+enum NextIndexField {
+    /// Indicates that the next field was found in the field order
+    Set { offset: usize, fmt: FortField },
+    /// Indicates that the next field was not found in the field order,
+    /// and therefore the next value should not be serialized.
+    Skip,
+    /// Indicates that the logic to check for the index of the next field
+    /// had not been run yet.
+    Unset,
+}
+
+impl Default for NextIndexField {
+    fn default() -> Self {
+        Self::Unset
+    }
 }
 
 #[derive(Debug, Default)]
 struct MapSerHelper {
-    next_field_index: Option<usize>,
-    next_field_fmt: Option<FortField>,
+    next_field: NextIndexField,
     data: Vec<Option<Vec<u8>>>,
     in_use: bool,
 }
@@ -799,8 +896,7 @@ struct MapSerHelper {
 impl MapSerHelper {
     fn take_validate_data(&mut self) -> Vec<Option<Vec<u8>>> {
         let data = std::mem::take(&mut self.data);
-        self.next_field_fmt = None;
-        self.next_field_index = None;
+        self.next_field = NextIndexField::Unset;
         self.in_use = false;
         data
     }
@@ -1115,11 +1211,15 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
 
     fn serialize_key_helper(&mut self, field: &str) -> SResult<()> {
         if self.fields.is_some() {
-            let (offset, fmt) = self
-                .get_fmt_and_index_offset_for_field(field)
-                .ok_or_else(|| SError::FieldMissingError(field.to_string()))?;
-            self.map_helper.next_field_index = Some(offset);
-            self.map_helper.next_field_fmt = Some(fmt);
+            let opt = self.get_fmt_and_index_offset_for_field(field);
+
+            match (opt, self.settings.allow_skipped_fields) {
+                (None, true) => self.map_helper.next_field = NextIndexField::Skip,
+                (None, false) => return Err(SError::FieldMissingError(field.to_string())),
+                (Some((offset, fmt)), _) => {
+                    self.map_helper.next_field = NextIndexField::Set { offset, fmt }
+                }
+            }
             Ok(())
         } else {
             Ok(())
@@ -1134,10 +1234,7 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
             return value.serialize(&mut *self);
         }
 
-        if let (Some(offset), Some(fmt)) = (
-            self.map_helper.next_field_index,
-            self.map_helper.next_field_fmt,
-        ) {
+        if let NextIndexField::Set { offset, fmt } = self.map_helper.next_field {
             while self.map_helper.data.len() <= offset {
                 self.map_helper.data.push(None);
             }
@@ -1148,23 +1245,42 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
             // let bytes = to_bytes(value, &fortfmt)?;
             let bytes = to_bytes_custom::<_, &str>(value, &fortfmt, None, self.settings)?;
             self.map_helper.data[offset] = Some(bytes);
+        } else if let NextIndexField::Skip = self.map_helper.next_field {
         } else {
             panic!(
                 "serialize_key must be called before serialize_value when field names are given."
             );
         }
 
+        self.map_helper.next_field = NextIndexField::Unset;
         Ok(())
     }
 
     fn end_helper(&mut self) -> SResult<()> {
-        if self.map_helper.next_field_index.is_some() {
+        // Ideally, I'd like catch if all fields are misspelled. Right now,
+        // that doesn't happen because the data vector will just be empty in
+        // that case. However, prefilling that broke some tests and checking
+        // that this wrote every field broke some of the doc tests (the ones
+        // with structures within tuples/vectors).
+        if self.fields.is_some() {
+            // If we were serializing with a list of fields giving the order, then
+            // the data hasn't been written yet; we've been putting it in the `data`
+            // vector so that we can fill in each of the fields if they are out of
+            // order.
             for maybe_bytes in self.map_helper.take_validate_data() {
                 if let Some(bytes) = maybe_bytes {
+                    // Calling this with None for the format for each entry uses the
+                    // internal logic of this function to get the correct format for
+                    // the next entry to know its width.
                     self.write_next_entry_raw(&bytes, None)?;
                 } else {
+                    // This case will happen if we somehow inserted a placeholder `None`
+                    // when serializing a field later in the order, but never got a value
+                    // for a field earlier in the order. That should mean that an earlier
+                    // name in the list of fields given didn't match any field on the
+                    // map or struct.
                     let field_name = self.curr_field().unwrap_or("?");
-                    unimplemented!("The field {field_name} did not have a value, but a later field did. This is not handled yet.");
+                    return Err(SError::UnknownFieldError(field_name.to_string()));
                 }
             }
         }
@@ -2384,6 +2500,60 @@ mod tests {
         };
         let s = to_string_with_fields(value, &fmt, &["b", "c", "a"]).unwrap();
         assert_eq!(s, " 42 .314E+01  Hello");
+    }
+
+    #[test]
+    fn test_struct_select_fields() {
+        let settings = SerSettings::default().allow_skipped_fields(true);
+        let fmt = FortFormat::parse("(a6,1x,i3)").unwrap();
+        let value = Test {
+            a: "Hello",
+            b: 42,
+            c: 3.14,
+        };
+        let s = to_string_custom(value, &fmt, Some(&["a", "b"]), &settings).unwrap();
+        assert_eq!(s, " Hello  42");
+    }
+
+    #[test]
+    fn test_struct_missing_field() {
+        let fmt = FortFormat::parse("(a6,1x,i3)").unwrap();
+        let value = Test {
+            a: "Hello",
+            b: 42,
+            c: 3.14,
+        };
+        let res = to_string_with_fields(value, &fmt, &["a", "b"]);
+        let right_error = if let Err(&SError::FieldMissingError(_)) = &res.as_ref() {
+            true
+        } else {
+            false
+        };
+        assert!(
+            right_error,
+            "Expected an Err(SError::FieldMissingError), instead got {res:?}"
+        );
+    }
+
+    #[test]
+    fn test_struct_misspelled_field() {
+        let settings = SerSettings::default().allow_skipped_fields(true);
+        let fmt = FortFormat::parse("(a6,1x,i3)").unwrap();
+        let value = Test {
+            a: "Hello",
+            b: 42,
+            c: 3.14,
+        };
+        let res = to_string_custom(value, &fmt, Some(&["z", "b"]), &settings);
+        let right_error = if let Err(&SError::UnknownFieldError(_)) = &res.as_ref() {
+            true
+        } else {
+            false
+        };
+        assert!(
+            right_error,
+            "Expected an Err(SError::UnknownFieldError), instead got {res:?}"
+        );
     }
 
     #[test]
