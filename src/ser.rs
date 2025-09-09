@@ -1,44 +1,44 @@
 //! Serialize data according to a Fortran format string.
-//! 
+//!
 //! # Basic usage
-//! 
+//!
 //! This module expects that you have a Fortran format string, such as
-//! `(a10,i3,f8.2)` and want to serialize data according to that format. 
+//! `(a10,i3,f8.2)` and want to serialize data according to that format.
 //! The functions provided by this module belong to three groups: `to_*`,
 //! `to_*_with_fields`, `to_*_custom`. The `to_*_custom` functions are the
-//! most flexible but the least convenient. You only need to use them if 
+//! most flexible but the least convenient. You only need to use them if
 //! the default [`SerSettings`] is not sufficient for your use case.
-//! 
+//!
 //! The distinction between the `to_*` and `to_*_with_fields` functions
-//! mainly matters when serializing structures or maps. The `to_*` functions 
+//! mainly matters when serializing structures or maps. The `to_*` functions
 //! will output values in the order they are defined. That is, this example
-//! will work, because the fields in `Person` are defined in the same order 
+//! will work, because the fields in `Person` are defined in the same order
 //! as they appear in the data:
-//! 
+//!
 //! ```
 //! use fortformat::format_specs::FortFormat;
 //! use fortformat::ser::to_string;
-//! 
+//!
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct Person {
 //!     name: &'static str,
 //!     age: i32,
 //!     weight: f32,
 //! }
-//! 
+//!
 //! let ff = FortFormat::parse("(a10,i3,f8.1)").unwrap();
 //! let p = Person { name: "John Doe", age: 30, weight: 180.5 };
 //! let s = to_string(p, &ff).unwrap();
 //! assert_eq!(s, "  John Doe 30   180.5");
 //! ```
-//! 
+//!
 //! However, the next example will *not* work, because the field order does not match
 //! the data:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string;
-//! # 
+//! #
 //! # #[derive(Debug, PartialEq, serde::Serialize)]
 //! # struct Person {
 //! #     name: String,
@@ -50,15 +50,15 @@
 //! let res = to_string(p, &ff);
 //! assert!(res.is_err())
 //! ```
-//! 
+//!
 //! If the order in which the fields need to be output is different from the order
 //! the fields are defined in the structure, then you need to use one of the `*_with_fields`
 //! functions:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string_with_fields;
-//! # 
+//! #
 //! # #[derive(Debug, PartialEq, serde::Serialize)]
 //! # struct Person {
 //! #     name: String,
@@ -71,195 +71,195 @@
 //! let s = to_string_with_fields(p, &ff, &fields).unwrap();
 //! assert_eq!(s, "   180.5 30  John Doe");
 //! ```
-//! 
+//!
 //! **Note: take special care with maps.** Most maps do not guarantee
 //! the order their values are visited, so using one of the serialization
 //! functions that doesn't take field names will usually result in undetermined
 //! order in which the data are written out.
-//! 
+//!
 //! # Serializing nested structures
-//! 
+//!
 //! Since Fortran formatted data does not have a way to represent nesting, this
 //! can be a little tricky. If relying on the order of structure fields, then you
 //! do not need to do anything special - the serializer will correctly recognize
 //! that only the bool, int, float, char, and str/String fields map to format
 //! fields:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string;
-//! 
+//!
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct SiteInfo {
 //!     name: String,
 //!     coords: Coordinates
 //! }
-//! 
+//!
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct Coordinates {
 //!     longitude: f32,
 //!     latitude: f32,
 //! }
-//! 
-//! let site = SiteInfo { 
+//!
+//! let site = SiteInfo {
 //!     name: "Ferris Island".to_string(),
 //!     coords: Coordinates { longitude: 1.0, latitude: -5.5 }
 //! };
-//! 
+//!
 //! let ff = FortFormat::parse("(a15,2f5.1)").unwrap();
 //! let s = to_string(&site, &ff).unwrap();
 //! assert_eq!(s, "  Ferris Island  1.0 -5.5");
 //! ```
-//! 
+//!
 //! However, the following example will return an error from the `to_string` function:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string_with_fields;
-//! # 
+//! #
 //! # #[derive(Debug, PartialEq, serde::Serialize)]
 //! # struct SiteInfo {
 //! #     name: String,
 //! #     coords: Coordinates
 //! # }
-//! # 
+//! #
 //! # #[derive(Debug, PartialEq, serde::Serialize)]
 //! # struct Coordinates {
 //! #     longitude: f32,
 //! #     latitude: f32,
 //! # }
-//! 
-//! let site = SiteInfo { 
+//!
+//! let site = SiteInfo {
 //!     name: "Ferris Island".to_string(),
 //!     coords: Coordinates { longitude: 1.0, latitude: -5.5 }
 //! };
-//! 
+//!
 //! let ff = FortFormat::parse("(a15,2f5.1)").unwrap();
 //! let fields = ["latitude", "longitude", "name"];
 //! let res = to_string_with_fields(&site, &ff, &fields);
 //! assert!(res.is_err());
 //! ```
-//! 
+//!
 //! Specifically, you would see an error that the "coords" field is missing.
 //! That is because, without the clue from the `#[serde(flatten)]` attribute
 //! that `coords` will not be one of the Fortran fields, the serializer can't
 //! tell that ahead of time. Adding `#[serde(flatten)]` to the `coords` field
 //! will fix this:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string_with_fields;
-//! 
+//!
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct SiteInfo {
 //!     name: String,
 //!     #[serde(flatten)]
 //!     coords: Coordinates
 //! }
-//! 
+//!
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct Coordinates {
 //!     longitude: f32,
 //!     latitude: f32,
 //! }
-//! 
-//! let site = SiteInfo { 
+//!
+//! let site = SiteInfo {
 //!     name: "Ferris Island".to_string(),
 //!     coords: Coordinates { longitude: 1.0, latitude: -5.5 }
 //! };
-//! 
+//!
 //! let ff = FortFormat::parse("(2f5.1,a15)").unwrap();
 //! let fields = ["latitude", "longitude", "name"];
 //! let s = to_string_with_fields(&site, &ff, &fields).unwrap();
 //! assert_eq!(s, " -5.5  1.0  Ferris Island");
 //! ```
-//! 
+//!
 //! You can also use `#[serde(flatten)]` on maps:
-//! 
+//!
 //! ```
 //! # use std::collections::HashMap;
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string_with_fields;
-//! 
+//!
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct SiteInfo {
 //!     name: String,
 //!     #[serde(flatten)]
 //!     concentrations: HashMap<&'static str, f32>
 //! }
-//! 
+//!
 //! let concentrations = HashMap::from([
 //!     ("co2", 413.5),
 //!     ("ch4", 1899.3),
 //! ]);
-//! 
+//!
 //! let site = SiteInfo{ name: "Mauna Loa".to_string(), concentrations };
 //! let ff = FortFormat::parse("(a12,10f8.1)").unwrap();
 //! let fields = ["name", "co2", "ch4"];
 //! let s = to_string_with_fields(&site, &ff, &fields).unwrap();
 //! assert_eq!(s, "   Mauna Loa   413.5  1899.3");
 //! ```
-//! 
+//!
 //! Note in this last example that the number of fields in the format string, `(a12,10f8.1)`,
 //! is larger than the number of fields actually written. This is fine, and is a useful way
 //! to provide a format string that can handle a sequence of an unknown length as the last
 //! thing to be serialized: just make the format string long enough to cover the largest
 //! possible number of elements.
-//! 
+//!
 //! # Field names, tuples, vectors, or other sequences
-//! 
+//!
 //! If using field names, there must be one for each concrete value serialized. Consider
 //! this example:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string_with_fields;
-//! 
+//!
 //! #[derive(Debug, PartialEq, serde::Serialize)]
 //! struct Coordinates {
 //!     longitude: f32,
 //!     latitude: f32,
 //! }
-//! 
+//!
 //! let value = ("Ferris Island", Coordinates{ longitude: 1.0, latitude: -5.5 });
 //! let ff = FortFormat::parse("(a13,1x,f5.1,f5.1)").unwrap();
 //! let fields = ["latitude", "longitude"];
 //! let res = to_string_with_fields(value, &ff, &fields);
 //! assert!(res.is_err());
 //! ```
-//! 
+//!
 //! This fails because although "latitude" and "longitude" are our only two named fields
 //! in `Coordinates`, the serializer needs one field name for each non-positional format
 //! spec in the format string. (Positional specs are ones like `x` that add space but
 //! do not represent a value.) Here, the string that is the first tuple element must have
 //! a field, even if it is a placeholder. The following will work:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string_with_fields;
-//! # 
+//! #
 //! # #[derive(Debug, PartialEq, serde::Serialize)]
 //! # struct Coordinates {
 //! #     longitude: f32,
 //! #     latitude: f32,
 //! # }
-//! # 
+//! #
 //! let value = ("Ferris Island", Coordinates{ longitude: 1.0, latitude: -5.5 });
 //! let ff = FortFormat::parse("(a13,1x,f5.1,f5.1)").unwrap();
 //! let fields = ["", "latitude", "longitude"];
 //! let s = to_string_with_fields(value, &ff, &fields).unwrap();
 //! assert_eq!(s, "Ferris Island  -5.5  1.0");
 //! ```
-//! 
+//!
 //! Another potentially confusing case is when you have a vector of the same structure
 //! repeated and you pass field names. In the example below, you might expect that the
 //! serializer could get mixed up by the repeated field names. However, this works
 //! correctly:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string_with_fields;
-//! # 
+//! #
 //! # #[derive(Debug, PartialEq, serde::Serialize)]
 //! # struct Coordinates {
 //! #     longitude: f32,
@@ -272,21 +272,21 @@
 //! let ff = FortFormat::parse("(4f6.1)").unwrap();
 //! let fields = ["latitude", "longitude", "latitude", "longitude"];
 //! let s = to_string_with_fields(value, &ff, &fields).unwrap();
-//! 
+//!
 //! assert_eq!(s, "  -5.5   1.0  60.0 -45.0");
 //! ```
-//! 
+//!
 //! The reason is that the serializer internally tracks which fields it has written
 //! and always uses the next field with the correct name. So in this example the process
 //! is:
-//! 
+//!
 //! 1. Take the first element of `value`, it is a struct, so take the first field `longitude`.
 //! 2. We have not yet serialized any values, so our format and field indices both are 0.
 //! 3. Starting from `fields[0]` find the first index where our current struct field, "longitude",
 //!    is present. This is index 1, so serialize the value using the format spec at index 1 and hold
 //!    this in memory.
 //!    (If positional format specs like `1x` are present, they are ignored while counting the index.)
-//! 4. Repeat for the other field on our field element. 
+//! 4. Repeat for the other field on our field element.
 //! 5. The first struct is fully serialized, write the bytes in the proper order (latitude first, them
 //!    longitude.)
 //! 6. Since we serialized two fields, increment the field and format index by 2.
@@ -294,24 +294,24 @@
 //! 8. Look for where "longitude" shows up in the list of `fields`, *starting from index 2*. This is at
 //!    index 3, so the longitude value will be serialized using the format at index 3 and written to the
 //!    corresponding position in the output.
-//! 
+//!
 //! At present, there is no way to tell it to "loop" the field names (i.e. you cannot pass just
 //! `["latitude", "longitude"]` for `fields` in the above example - it must have 4 elements matching
 //! 4 total fields).
-//! 
+//!
 //! # Strings and the format spec
-//! 
+//!
 //! The Fortran `CHARACTER` type is essentially an alias for `byte`, as Fortran was not
 //! designed with multi-byte characters in mind. Thus, the character format `aN` means
 //! that field can only hold *N* bytes, which may be fewer than *N* Unicode characters.
 //! If your output strings contain non-ASCII characters and are being unexpectedly truncated,
 //! this could be why.
-//! 
+//!
 //! # Enum variants and the format spec
-//! 
+//!
 //! Enum variants can be identified either by their name or index. This crate allows either,
 //! and will automatically select which one to use based on the format string:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string;
@@ -320,24 +320,24 @@
 //!     Alpha,
 //!     Beta
 //! }
-//! 
+//!
 //! // If the format spec for the variant is an integer, then the
 //! // variant index will be written.
 //! let value = [Test::Alpha, Test::Beta];
 //! let ff1 = FortFormat::parse("(i1,1x,i1)").unwrap();
 //! let s1 = to_string(&value, &ff1).unwrap();
 //! assert_eq!(s1, "0 1");
-//! 
+//!
 //! // If the format spec for the variant is a character array,
 //! // then the format name is written instead.
 //! let ff2 = FortFormat::parse("(a5,1x,a5)").unwrap();
 //! let s2 = to_string(&value, &ff2).unwrap();
 //! assert_eq!(s2, "Alpha  Beta");
 //! ```
-//! 
+//!
 //! Variants containing values are also supported, but will run into the limits of Fortran
 //! formatted output. Given an enum whose variants both contain a similar type:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string;
@@ -346,16 +346,16 @@
 //!     Alpha(i32),
 //!     Beta(u16)
 //! }
-//! 
+//!
 //! let value = [Test::Alpha(-99), Test::Beta(42)];
 //! let ff = FortFormat::parse("2(a5,1x,i4,1x)").unwrap();
 //! let s = to_string(&value, &ff).unwrap();
 //! assert_eq!(s, "Alpha  -99  Beta   42");
 //! ```
-//! 
+//!
 //! this will work for any value of `Test`, because both variants can be serialized as the
 //! variant name (or index) and an integer value. However, if you had an enum like:
-//! 
+//!
 //! ```no_run
 //! enum InstrumentValue {
 //!     Nothing,
@@ -363,16 +363,16 @@
 //!     ValueWithError(f32, f32)
 //! }
 //! ```
-//! 
+//!
 //! it's clear that the different variants correspond to different formats, e.g.:
-//! 
+//!
 //! - `Nothing` = `(a14)`
 //! - `Value` = `(a14,f13.5)`
 //! - `ValueWithError` = `(a14,f13.5,f13.5)`
-//! 
+//!
 //! One way way around this would be to use the `into` attribute to tell serde
 //! to convert the enum into some type with a common representation
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::to_string;
@@ -383,7 +383,7 @@
 //!     Value(f32),
 //!     ValueWithError(f32, f32)
 //! }
-//! 
+//!
 //! // Convert the enum into its name and two floats - even if the variant
 //! // doesn't have two floats. Use a fill value for the float(s) not present.
 //! impl From<InstrumentValue> for (&'static str, f32, f32) {
@@ -395,33 +395,33 @@
 //!         }
 //!     }
 //! }
-//! 
+//!
 //! let values = [
 //!     InstrumentValue::Nothing,
 //!     InstrumentValue::Value(1.0),
 //!     InstrumentValue::ValueWithError(2.0, 0.2)
 //! ];
-//! 
+//!
 //! // Because we included the #[serde(into = "...")] attribute on the enum,
 //! // when serde goes to serialize it, it first gets converted to a string
 //! // and two floats, and those are serialized. This allows us to use
 //! // (a7,f8.3,f8.3) for any variant.
 //! let ff = FortFormat::parse("(3(a7,1x,f8.3,1x,f8.3,1x))").unwrap();
 //! let s = to_string(values, &ff).unwrap();
-//! 
+//!
 //! assert_eq!(s, "Nothing -999.000 -999.000   Value    1.000 -999.000 Val+Err    2.000    0.200");
 //! ```
-//! 
+//!
 //! If you need to be able to deserialize such a value, you would probably also want to include the
 //! `#[serde(try_from = "...")]` attribute.
-//! 
+//!
 //! ## Enum representations
-//! 
+//!
 //! For now, the different representations of enums are partially supported, but will all return the
-//! same result. Using internal or adjacent tagging on types passed to one of the `*_with_fields` 
+//! same result. Using internal or adjacent tagging on types passed to one of the `*_with_fields`
 //! functions will not correctly place the tag value in the correct place given the field names.
 //! That is, given the following example:
-//! 
+//!
 //! ```
 //! # use fortformat::format_specs::FortFormat;
 //! # use fortformat::ser::{to_string,to_string_with_fields};
@@ -431,12 +431,12 @@
 //!     Alpha{value: i32},
 //!     Beta{value: i32},
 //! }
-//! 
+//!
 //! let in_vec = vec![Internal::Alpha{value: 12}, Internal::Beta{value: 24}];
 //! let in_ff = FortFormat::parse("(2(a6,i3))").unwrap();
 //! let in_s = to_string(&in_vec, &in_ff).unwrap();
 //! assert_eq!(in_s, " Alpha 12  Beta 24");
-//! 
+//!
 //! let fields = ["type", "value"];
 //! let ff = FortFormat::parse("(i2,1x,a5)").unwrap();
 //! let res = to_string_with_fields(
@@ -446,52 +446,66 @@
 //! );
 //! assert!(res.is_err());
 //! ```
-//! 
+//!
 //! you will get an error because it still tries to serialize the variant first. This is not
 //! the desired behavior, and may be fixed in a future version.
-//! 
+//!
 //! # None and unit types
-//! 
+//!
 //! Since Fortran does not have a good way to represent types containing no data, there was not an
 //! single, clear way to handle `None` values, the unit `()`, and unit structures (e.g. structures
 //! with no values inside them). Our current approach is to write all of these types as fill values.
 //! The logic was:
-//! 
+//!
 //! 1. Fill values are the closest thing to an "optional" type in Fortran, so are the least bad way
 //!    to communicate a `None` value.
 //! 2. Unit types still need a valid placeholder to fill their space in the text input/output, so
 //!    again a fill value is the least bad way to handle this.
-//! 
-//! The default "fill value" mimics Fortran's behavior when a value overflows its field width - 
+//!
+//! The default "fill value" mimics Fortran's behavior when a value overflows its field width -
 //! in such a case, the field is filled with `*`s. Since such a value is interpreted by Fortran
 //! as a non-number (for numeric fields), this is again the least-bad default in our opinion.
 //! You can change how fill values are generated using one of the `*_custom` methods with a
 //! [`SerSettings`] instance. Fill value format is defined by a [`NoneFill`] enum contained
 //! in [`SerSettings`]; see the [`NoneFill`] documentation for the available choices.
-use std::{fmt::{Octal, UpperHex}, io::Write, string::FromUtf8Error, sync::Arc};
+use std::{
+    fmt::{Octal, UpperHex},
+    io::Write,
+    string::FromUtf8Error,
+    sync::Arc,
+};
 
+use crate::{
+    de::FortFormat,
+    format_specs::{FortField, IntBase, RealFmt},
+    serde_common::{NoneFill, SError, SResult},
+};
 use ryu_floating_decimal::d2d;
 use serde::ser;
-use crate::{de::FortFormat, format_specs::{FortField, IntBase, RealFmt}, serde_common::{NoneFill, SError, SResult}};
 
 // TODO: debug why settings for left align aren't carrying through structures properly
 // (collate results example)
-static DEFAULT_SER_SETTINGS: SerSettings = SerSettings { fill_method: NoneFill::default_inner(), newline: b"\n", align_left_str: false };
+static DEFAULT_SER_SETTINGS: SerSettings = SerSettings {
+    fill_method: NoneFill::default_inner(),
+    newline: b"\n",
+    align_left_str: false,
+};
 
 /// Serialize a value into a string using the given Fortran format.
-/// 
+///
 /// When serializing structures or maps using this function, the order of the fields
 /// or values is the order in which they will be serialized. This must match the order
 /// of the type specifications in the format. Note that because most map types do not
 /// provide a consistent order, it is therefore not recommended to use this function
 /// when serializing a map or anything containing a map. Use [`to_string_with_fields`]
 /// instead.
-/// 
+///
 /// In addition to erroring if the serialization fails (see [`to_bytes`] for possible
 /// causes), this function will error in the unlikely case where the serialized bytes
 /// cannot be interpreted as valid UTF-8.
-pub fn to_string<T>(value: T, fmt: &FortFormat) -> SResult<String> 
-where T: ser::Serialize
+pub fn to_string<T>(value: T, fmt: &FortFormat) -> SResult<String>
+where
+    T: ser::Serialize,
 {
     let mut serializer = Serializer::<_, &str>::new(fmt);
     value.serialize(&mut serializer)?;
@@ -499,16 +513,18 @@ where T: ser::Serialize
 }
 
 /// Serialize a value into a string using the given Fortran format and a list of field names.
-/// 
+///
 /// When serializing a structure or map, the fields/values will be written out in the order
 /// that their names appear in `fields`. (For maps with non-string keys, the serialized version
 /// of each key is matched against `fields`.) See the module-level documentation for how this
 /// works when a struct/map is part of a tuple.
-/// 
+///
 /// Like [`to_string`], this will return an error if serialization fails or if the resulting
 /// bytes cannot be converted to UTF-8.
-pub fn to_string_with_fields<T, F>(value: T, fmt: &FortFormat, fields: &[F]) -> SResult<String> 
-where T: ser::Serialize, F: AsRef<str>
+pub fn to_string_with_fields<T, F>(value: T, fmt: &FortFormat, fields: &[F]) -> SResult<String>
+where
+    T: ser::Serialize,
+    F: AsRef<str>,
 {
     let mut serializer = Serializer::new_with_fields(fmt, fields);
     value.serialize(&mut serializer)?;
@@ -516,13 +532,20 @@ where T: ser::Serialize, F: AsRef<str>
 }
 
 /// Serialize a value into a string with full control over how the serialization is done.
-/// 
+///
 /// Use this method if you need to pass custom settings. See [`SerSettings`] for available
 /// options. Pass `None` for `fields` if there are no field names to match up. Note that
 /// calling without fields will require annotating the type F for the fields, so you would
 /// call this as `to_string_custom::<_, &str>(...)` in that case.
-pub fn to_string_custom<T, F>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: &SerSettings) -> SResult<String> 
-where T: ser::Serialize, F: AsRef<str>
+pub fn to_string_custom<T, F>(
+    value: T,
+    fmt: &FortFormat,
+    fields: Option<&[F]>,
+    settings: &SerSettings,
+) -> SResult<String>
+where
+    T: ser::Serialize,
+    F: AsRef<str>,
 {
     let mut serializer = Serializer::new_custom(fmt, fields, settings);
     value.serialize(&mut serializer)?;
@@ -530,22 +553,23 @@ where T: ser::Serialize, F: AsRef<str>
 }
 
 /// Serialize a value into a sequence of bytes using the given Fortran format.
-/// 
+///
 /// This is the same as [`to_string`], except the resulting bytes are directly
 /// returned, rather than being converted to UTF-8 first. If you don't need
 /// a string, this avoids the possible error from non-UTF8 bytes.
-/// 
+///
 /// This function will return an error if serialization fails. Some common reasons
 /// for this are:
-/// 
+///
 /// - The next Rust type does not match the next Fortran type in the format spec.
 /// - The type `T` has nested structures (a struct with another struct or map as a field)
 ///   and does not use the `#[serde(flatten)]` attribute on the nested struct or map.
 /// - The format spec is too short, and ends before the values to be serialized do.
-/// 
+///
 /// These cases are represented by the variants of [`SError`].
-pub fn to_bytes<T>(value: T, fmt: &FortFormat) -> SResult<Vec<u8>> 
-where T: ser::Serialize    
+pub fn to_bytes<T>(value: T, fmt: &FortFormat) -> SResult<Vec<u8>>
+where
+    T: ser::Serialize,
 {
     let mut serializer = Serializer::<_, &str>::new(fmt);
     value.serialize(&mut serializer)?;
@@ -553,14 +577,19 @@ where T: ser::Serialize
 }
 
 /// Serialize a value into a sequence of bytes using the given Fortran format and a list of field names.
-/// 
+///
 /// This works identically to [`to_string_with_fields`] except the serialized bytes are returned directly,
 /// rather than being converted to a UTF-8 string.
-/// 
+///
 /// An additional reason compared to [`to_bytes`] that this function might error is if the list of field
 /// names is shorter than the number of concrete values to serialize.
-pub fn to_bytes_with_fields<T, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: &[F]) -> SResult<Vec<u8>> 
-where T: ser::Serialize    
+pub fn to_bytes_with_fields<T, F: AsRef<str>>(
+    value: T,
+    fmt: &FortFormat,
+    fields: &[F],
+) -> SResult<Vec<u8>>
+where
+    T: ser::Serialize,
 {
     let mut serializer = Serializer::new_with_fields(fmt, fields);
     value.serialize(&mut serializer)?;
@@ -568,13 +597,19 @@ where T: ser::Serialize
 }
 
 /// Serialize a value into a sequence of bytes with full control over how the serialization is done.
-/// 
+///
 /// Use this method if you need to pass custom settings. See [`SerSettings`] for available
 /// options. Pass `None` for `fields` if there are no field names to match up.  Note that
 /// calling without fields will require annotating the type F for the fields, so you would
 /// call this as `to_string_custom::<_, &str>(...)` in that case.
-pub fn to_bytes_custom<T, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: &SerSettings) -> SResult<Vec<u8>> 
-where T: ser::Serialize    
+pub fn to_bytes_custom<T, F: AsRef<str>>(
+    value: T,
+    fmt: &FortFormat,
+    fields: Option<&[F]>,
+    settings: &SerSettings,
+) -> SResult<Vec<u8>>
+where
+    T: ser::Serialize,
 {
     let mut serializer = Serializer::new_custom(fmt, fields, settings);
     value.serialize(&mut serializer)?;
@@ -582,17 +617,17 @@ where T: ser::Serialize
 }
 
 /// Serialize a value directly to a writer using the given Fortran format.
-/// 
+///
 /// This is a more convenient way to write to e.g. a file than using [`to_bytes`]
 /// to get the byte array first, and writing that. It will also automatically
 /// append a newline at the end of the record so that the writer is ready
 /// for the next record.
-/// 
+///
 /// In addition to possible serialization errors, this will return an error if
 /// writing fails.
-/// 
+///
 /// # Notes:
-/// 
+///
 /// 1. It is *strongly* encouraged to use some form of buffered writer
 ///    for `writer`, as the serializer often writes single bytes due to the
 ///    need to match Fortran-style numbers. Without buffering, this could result
@@ -601,10 +636,10 @@ where T: ser::Serialize
 ///    will be one data record per line. This method does *not* automatically
 ///    add a newline at the end of a record; you will need to do so by calling
 ///    `writer.write(b"\n")` or something equivalent.
-pub fn to_writer<T, W>(value: T, fmt: &FortFormat, writer: W) -> SResult<()> 
+pub fn to_writer<T, W>(value: T, fmt: &FortFormat, writer: W) -> SResult<()>
 where
     T: ser::Serialize,
-    W: Write
+    W: Write,
 {
     let mut serializer = Serializer::<_, &str>::new_writer(fmt, writer);
     value.serialize(&mut serializer)?;
@@ -613,13 +648,18 @@ where
 }
 
 /// Serialize a value directly to a writer using the given Fortran format and a list of field names.
-/// 
+///
 /// This is the equivalent of [`to_bytes_with_fields`] but writes directly to something
 /// implementing [`std::io::Write`]. The same notes given for [`to_writer`] apply.
-pub fn to_writer_with_fields<T, W, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: &[F], writer: W) -> SResult<()> 
+pub fn to_writer_with_fields<T, W, F: AsRef<str>>(
+    value: T,
+    fmt: &FortFormat,
+    fields: &[F],
+    writer: W,
+) -> SResult<()>
 where
     T: ser::Serialize,
-    W: Write
+    W: Write,
 {
     let mut serializer = Serializer::new_writer_with_fields(fmt, fields, writer);
     value.serialize(&mut serializer)?;
@@ -628,16 +668,22 @@ where
 }
 
 /// Serialize a value directly to a writer with full control over how the serialization is done.
-/// 
+///
 /// Use this method if you need to pass custom settings. See [`SerSettings`] for available
 /// options. Pass `None` for `fields` if there are no field names to match up.  Note that
 /// calling without fields will require annotating the type F for the fields, so you would
 /// call this as `to_string_custom::<_, &str>(...)` in that case. You can change the newline
-/// written to the end of the recrod with the [`SerSettings`] instance. 
-pub fn to_writer_custom<T, W, F: AsRef<str>>(value: T, fmt: &FortFormat, fields: Option<&[F]>, settings: &SerSettings, writer: W) -> SResult<()> 
+/// written to the end of the recrod with the [`SerSettings`] instance.
+pub fn to_writer_custom<T, W, F: AsRef<str>>(
+    value: T,
+    fmt: &FortFormat,
+    fields: Option<&[F]>,
+    settings: &SerSettings,
+    writer: W,
+) -> SResult<()>
 where
     T: ser::Serialize,
-    W: Write
+    W: Write,
 {
     let mut serializer = Serializer::new_writer_custom(fmt, fields, settings, writer);
     value.serialize(&mut serializer)?;
@@ -646,21 +692,27 @@ where
 }
 
 /// Write many sets of values with the same format, one per line.
-/// 
-/// This will use the format `fmt` to write each of the elements in `values`. 
+///
+/// This will use the format `fmt` to write each of the elements in `values`.
 /// Each one will be separated by the newline character defined in `settings`,
-/// which by default is `\n`. 
-/// 
+/// which by default is `\n`.
+///
 /// If you have many values to write already collected in a sequence, this function
 /// should be more efficient than repeated calls to one of the `to_writer*` functions,
 /// as it won't have to rebuild the serializer for each line. However, if you only
 /// have a lazy iterator over your values, you will need to call one of the `to_writer*`
 /// functions for each element.
-pub fn many_to_writer_custom<T, W, F>(values: &[T], fmt: &FortFormat, fields: Option<&[F]>, settings: &SerSettings, writer: W) -> SResult<()> 
+pub fn many_to_writer_custom<T, W, F>(
+    values: &[T],
+    fmt: &FortFormat,
+    fields: Option<&[F]>,
+    settings: &SerSettings,
+    writer: W,
+) -> SResult<()>
 where
     T: ser::Serialize,
     W: Write,
-    F: AsRef<str>
+    F: AsRef<str>,
 {
     let mut serializer = Serializer::new_writer_custom(fmt, fields, settings, writer);
     for val in values.iter() {
@@ -671,18 +723,18 @@ where
 }
 
 /// Settings for serialization.
-/// 
+///
 /// This can be used with the `*_custom` methods to change how the serialization
 /// behaves. To construct, call `SerSettings::default()` to build the default,
 /// then use the various methods to update the settings, e.g.:
-/// 
+///
 /// ```
 /// # use fortformat::ser::SerSettings;
 /// # use fortformat::serde_common::NoneFill;
 /// let settings = SerSettings::default()
 ///     .fill_method(NoneFill::new_string("N/A"));
 /// ```
-/// 
+///
 /// Each of the methods' documentation describes the purpose of its setting
 /// and the default.
 #[derive(Debug, Clone)]
@@ -700,7 +752,7 @@ impl Default for SerSettings {
 
 impl SerSettings {
     /// Sets how `None` values, the unit type, and unit structs are written.
-    /// 
+    ///
     /// The default is the default [`NoneFill`], which is to write an "*" for
     /// the full width of the field.
     pub fn fill_method(mut self, fill_method: NoneFill) -> Self {
@@ -709,11 +761,11 @@ impl SerSettings {
     }
 
     /// Sets the bytes used to end a record and start a new line in a writer.
-    /// 
+    ///
     /// The default is `b"\n"`, i.e. a literal newline byte. This matches the Rust
     /// convention of always using only a newline character, and never including a
-    /// carriage return. 
-    /// 
+    /// carriage return.
+    ///
     /// As a trick, you can pass an empty bytestring, `b""`, if you do not want
     /// any new line bytes(s) automatically appended by one of the writer functions.
     pub fn newline(mut self, newline: &'static [u8]) -> Self {
@@ -722,12 +774,12 @@ impl SerSettings {
     }
 
     /// Strings will be serialized aligned to the left of the field.
-    /// 
+    ///
     /// This is not standard Fortran behavior, which always aligns right.
     /// However, since Fortran character arrays are always fixed width, you
     /// often get the effect that they are left justified, and setting this
-    /// to `true` mimics that. 
-    /// 
+    /// to `true` mimics that.
+    ///
     /// TODO: provide a "serialize_with" function that pads strings with
     /// spaces to a given width.
     pub fn align_left_str(mut self, align_left: bool) -> Self {
@@ -741,7 +793,7 @@ struct MapSerHelper {
     next_field_index: Option<usize>,
     next_field_fmt: Option<FortField>,
     data: Vec<Option<Vec<u8>>>,
-    in_use: bool
+    in_use: bool,
 }
 
 impl MapSerHelper {
@@ -759,7 +811,7 @@ struct Serializer<'f, W: Write, F: AsRef<str>> {
     buf: W,
     fmt: &'f FortFormat,
     fmt_idx: usize,
-    fields: Option<&'f[F]>,
+    fields: Option<&'f [F]>,
     field_idx: usize,
     map_helper: MapSerHelper,
     settings: &'f SerSettings,
@@ -767,15 +819,43 @@ struct Serializer<'f, W: Write, F: AsRef<str>> {
 
 impl<'f, F: AsRef<str>> Serializer<'f, Vec<u8>, F> {
     pub fn new(fmt: &'f FortFormat) -> Self {
-        Self { buf: vec![], fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default(), settings: &DEFAULT_SER_SETTINGS }
+        Self {
+            buf: vec![],
+            fmt,
+            fmt_idx: 0,
+            fields: None,
+            field_idx: 0,
+            map_helper: MapSerHelper::default(),
+            settings: &DEFAULT_SER_SETTINGS,
+        }
     }
 
-    pub fn new_with_fields(fmt: &'f FortFormat, fields: &'f[F]) -> Self {
-        Self { buf: vec![], fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default(), settings: &DEFAULT_SER_SETTINGS }
+    pub fn new_with_fields(fmt: &'f FortFormat, fields: &'f [F]) -> Self {
+        Self {
+            buf: vec![],
+            fmt,
+            fmt_idx: 0,
+            fields: Some(fields),
+            field_idx: 0,
+            map_helper: MapSerHelper::default(),
+            settings: &DEFAULT_SER_SETTINGS,
+        }
     }
 
-    pub fn new_custom(fmt: &'f FortFormat, fields: Option<&'f[F]>, settings: &'f SerSettings) -> Self {
-        Self { buf: vec![], fmt, fmt_idx: 0, fields, field_idx: 0, map_helper: MapSerHelper::default(), settings }
+    pub fn new_custom(
+        fmt: &'f FortFormat,
+        fields: Option<&'f [F]>,
+        settings: &'f SerSettings,
+    ) -> Self {
+        Self {
+            buf: vec![],
+            fmt,
+            fmt_idx: 0,
+            fields,
+            field_idx: 0,
+            map_helper: MapSerHelper::default(),
+            settings,
+        }
     }
 
     pub fn into_bytes(self) -> Vec<u8> {
@@ -787,17 +867,46 @@ impl<'f, F: AsRef<str>> Serializer<'f, Vec<u8>, F> {
     }
 }
 
-impl <'f, W: Write, F: AsRef<str>> Serializer<'f, W, F> {
+impl<'f, W: Write, F: AsRef<str>> Serializer<'f, W, F> {
     pub fn new_writer(fmt: &'f FortFormat, writer: W) -> Self {
-        Self { buf: writer, fmt, fmt_idx: 0, fields: None, field_idx: 0, map_helper: MapSerHelper::default(), settings: &DEFAULT_SER_SETTINGS }
+        Self {
+            buf: writer,
+            fmt,
+            fmt_idx: 0,
+            fields: None,
+            field_idx: 0,
+            map_helper: MapSerHelper::default(),
+            settings: &DEFAULT_SER_SETTINGS,
+        }
     }
 
-    pub fn new_writer_with_fields(fmt: &'f FortFormat, fields: &'f[F], writer: W) -> Self {
-        Self { buf: writer, fmt, fmt_idx: 0, fields: Some(fields), field_idx: 0, map_helper: MapSerHelper::default(), settings: &DEFAULT_SER_SETTINGS }
+    pub fn new_writer_with_fields(fmt: &'f FortFormat, fields: &'f [F], writer: W) -> Self {
+        Self {
+            buf: writer,
+            fmt,
+            fmt_idx: 0,
+            fields: Some(fields),
+            field_idx: 0,
+            map_helper: MapSerHelper::default(),
+            settings: &DEFAULT_SER_SETTINGS,
+        }
     }
 
-    pub fn new_writer_custom(fmt: &'f FortFormat, fields: Option<&'f[F]>, settings: &'f SerSettings, writer: W) -> Self {
-        Self { buf: writer, fmt, fmt_idx: 0, fields: fields, field_idx: 0, map_helper: MapSerHelper::default(), settings }
+    pub fn new_writer_custom(
+        fmt: &'f FortFormat,
+        fields: Option<&'f [F]>,
+        settings: &'f SerSettings,
+        writer: W,
+    ) -> Self {
+        Self {
+            buf: writer,
+            fmt,
+            fmt_idx: 0,
+            fields: fields,
+            field_idx: 0,
+            map_helper: MapSerHelper::default(),
+            settings,
+        }
     }
 }
 
@@ -832,9 +941,9 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
                 Some(field) => {
                     self.fmt_idx += 1;
                     self.field_idx += 1;
-                    return Ok(field)
-                },
-                None => return Err(SError::FormatSpecTooShort)
+                    return Ok(field);
+                }
+                None => return Err(SError::FormatSpecTooShort),
             }
         }
     }
@@ -852,7 +961,8 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
             return None;
         }
 
-        self.fields.map(|f| f.get(self.field_idx - 1))
+        self.fields
+            .map(|f| f.get(self.field_idx - 1))
             .flatten()
             .map(|f| f.as_ref())
     }
@@ -877,7 +987,7 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
         loop {
             let fmt = self.fmt.get_field(j)?;
             if !fmt.is_positional() && i == n {
-                return Some(fmt)
+                return Some(fmt);
             } else if !fmt.is_positional() {
                 i += 1;
             }
@@ -903,7 +1013,7 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
 
     /// Write an existing slice of bytes to the buffer and advance the internal pointer to the
     /// next format and field name.
-    /// 
+    ///
     /// # Panics
     /// Panics if the input slice does not have the number of bytes expected for the next format.
     /// It is the caller's responsibility to ensure that the correct number of bytes are provided.
@@ -918,10 +1028,21 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
         let nbytes = match fmt {
             FortField::Char { width } => width,
             FortField::Logical { width } => Some(width),
-            FortField::Integer { width, zeros: _, base: _ } => Some(width),
-            FortField::Real { width, precision: _, fmt: _, scale: _ } => Some(width),
+            FortField::Integer {
+                width,
+                zeros: _,
+                base: _,
+            } => Some(width),
+            FortField::Real {
+                width,
+                precision: _,
+                fmt: _,
+                scale: _,
+            } => Some(width),
             FortField::Any => Some(bytes.len() as u32),
-            FortField::Skip => panic!("Should not get a skip format, should have advanced over all skips"),
+            FortField::Skip => {
+                panic!("Should not get a skip format, should have advanced over all skips")
+            }
         };
 
         if let Some(n) = nbytes {
@@ -938,38 +1059,64 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
         Ok(())
     }
 
-    fn serialize_integer<I: itoa::Integer + Octal + UpperHex>(&mut self, abs_value: I, is_neg: bool) -> SResult<()> {
+    fn serialize_integer<I: itoa::Integer + Octal + UpperHex>(
+        &mut self,
+        abs_value: I,
+        is_neg: bool,
+    ) -> SResult<()> {
         let next_fmt = *self.next_fmt()?;
         if let FortField::Integer { width, zeros, base } = next_fmt {
             serialize_integer(width, zeros, base, &mut self.buf, abs_value, is_neg)
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "integer", field_name: self.try_prev_field().map(|f| f.to_string()) })
+            Err(SError::FormatTypeMismatch {
+                spec_type: next_fmt,
+                serde_type: "integer",
+                field_name: self.try_prev_field().map(|f| f.to_string()),
+            })
         }
     }
 
     fn serialize_real(&mut self, v: f64) -> SResult<()> {
         let next_fmt = *self.next_fmt()?;
-        if let FortField::Real { width, precision, fmt, scale } = next_fmt {
-            let precision = precision.ok_or_else(|| SError::InvalidOutputFmt(
-                next_fmt, "real number formats must include a precision for output".to_string()
-            ))?;
+        if let FortField::Real {
+            width,
+            precision,
+            fmt,
+            scale,
+        } = next_fmt
+        {
+            let precision = precision.ok_or_else(|| {
+                SError::InvalidOutputFmt(
+                    next_fmt,
+                    "real number formats must include a precision for output".to_string(),
+                )
+            })?;
 
             // TODO: apparently E and D formats can specify the number of digits in the exponent, that will
             // need added to the format spec.
             match fmt {
-                RealFmt::D => serialize_real_exp(&mut self.buf, v, width, precision, scale, "D", None),
-                RealFmt::E => serialize_real_exp(&mut self.buf, v, width, precision, scale, "E", None),
+                RealFmt::D => {
+                    serialize_real_exp(&mut self.buf, v, width, precision, scale, "D", None)
+                }
+                RealFmt::E => {
+                    serialize_real_exp(&mut self.buf, v, width, precision, scale, "E", None)
+                }
                 RealFmt::F => serialize_real_f(&mut self.buf, v, width, precision, scale),
                 RealFmt::G => todo!(),
             }
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "float", field_name: self.try_prev_field().map(|f| f.to_string()) })
+            Err(SError::FormatTypeMismatch {
+                spec_type: next_fmt,
+                serde_type: "float",
+                field_name: self.try_prev_field().map(|f| f.to_string()),
+            })
         }
     }
 
     fn serialize_key_helper(&mut self, field: &str) -> SResult<()> {
         if self.fields.is_some() {
-            let (offset, fmt) = self.get_fmt_and_index_offset_for_field(field)
+            let (offset, fmt) = self
+                .get_fmt_and_index_offset_for_field(field)
                 .ok_or_else(|| SError::FieldMissingError(field.to_string()))?;
             self.map_helper.next_field_index = Some(offset);
             self.map_helper.next_field_fmt = Some(fmt);
@@ -981,12 +1128,16 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
 
     fn serialize_value_helper<T: ?Sized>(&mut self, value: &T) -> SResult<()>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         if self.fields.is_none() {
             return value.serialize(&mut *self);
         }
 
-        if let (Some(offset), Some(fmt)) = (self.map_helper.next_field_index, self.map_helper.next_field_fmt) {
+        if let (Some(offset), Some(fmt)) = (
+            self.map_helper.next_field_index,
+            self.map_helper.next_field_fmt,
+        ) {
             while self.map_helper.data.len() <= offset {
                 self.map_helper.data.push(None);
             }
@@ -998,7 +1149,9 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
             let bytes = to_bytes_custom::<_, &str>(value, &fortfmt, None, self.settings)?;
             self.map_helper.data[offset] = Some(bytes);
         } else {
-            panic!("serialize_key must be called before serialize_value when field names are given.");
+            panic!(
+                "serialize_key must be called before serialize_value when field names are given."
+            );
         }
 
         Ok(())
@@ -1016,7 +1169,6 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
             }
         }
         Ok(())
-        
     }
 
     fn end_record(&mut self) -> SResult<()> {
@@ -1026,7 +1178,6 @@ impl<'f, W: Write + 'f, F: AsRef<str>> Serializer<'f, W, F> {
         Ok(())
     }
 }
-
 
 impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::Serializer for &'a mut Serializer<'f, W, F> {
     type Ok = ();
@@ -1047,7 +1198,11 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::Serializer for &'a mut Serialize
         if let FortField::Logical { width } = next_fmt {
             serialize_logical(v, width, &mut self.buf)
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "bool", field_name: self.try_prev_field().map(|f| f.to_string()) })
+            Err(SError::FormatTypeMismatch {
+                spec_type: next_fmt,
+                serde_type: "bool",
+                field_name: self.try_prev_field().map(|f| f.to_string()),
+            })
         }
     }
 
@@ -1112,19 +1267,27 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::Serializer for &'a mut Serialize
         if let FortField::Char { width } = next_fmt {
             serialize_characters(v, width, &mut self.buf, self.settings.align_left_str)
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: next_fmt, serde_type: "char/str/bytes", field_name: self.try_prev_field().map(|f| f.to_string()) })
+            Err(SError::FormatTypeMismatch {
+                spec_type: next_fmt,
+                serde_type: "char/str/bytes",
+                field_name: self.try_prev_field().map(|f| f.to_string()),
+            })
         }
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
         let next_fmt = *self.next_fmt()?;
-        let fill_bytes = self.settings.fill_method.make_fill_bytes(&next_fmt, self.settings.align_left_str)?;
+        let fill_bytes = self
+            .settings
+            .fill_method
+            .make_fill_bytes(&next_fmt, self.settings.align_left_str)?;
         self.write_next_entry_raw(&fill_bytes, Some(next_fmt))
     }
 
     fn serialize_some<T: ?Sized>(self, value: &T) -> Result<Self::Ok, Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         value.serialize(self)
     }
 
@@ -1146,14 +1309,22 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::Serializer for &'a mut Serialize
         // as an integer or string.
         // TODO: add deserialization to allow round-tripping.
         let peeked_fmt = *self.peek_fmt().ok_or_else(|| SError::FormatSpecTooShort)?;
-        if let FortField::Integer { width: _, zeros: _, base: _ } = peeked_fmt {
+        if let FortField::Integer {
+            width: _,
+            zeros: _,
+            base: _,
+        } = peeked_fmt
+        {
             self.serialize_u32(variant_index)
         } else if let FortField::Char { width: _ } = peeked_fmt {
             self.serialize_str(variant)
         } else {
-            Err(SError::FormatTypeMismatch { spec_type: peeked_fmt, serde_type: "str or integer", field_name: self.try_prev_field().map(|f| f.to_string()) })
+            Err(SError::FormatTypeMismatch {
+                spec_type: peeked_fmt,
+                serde_type: "str or integer",
+                field_name: self.try_prev_field().map(|f| f.to_string()),
+            })
         }
-
     }
 
     fn serialize_newtype_struct<T: ?Sized>(
@@ -1162,7 +1333,8 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::Serializer for &'a mut Serialize
         value: &T,
     ) -> Result<Self::Ok, Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         value.serialize(self)
     }
 
@@ -1174,7 +1346,8 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::Serializer for &'a mut Serialize
         value: &T,
     ) -> Result<Self::Ok, Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         // Consider this behavior subject to change, but it seems that the most sensible
         // way to serialize a variant is to put the index/variant in the first field and
         // the value in the second.
@@ -1249,7 +1422,8 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeSeq for &'a mut Seriali
 
     fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         // From a serialization standpoint, we just serialize each value in a sequence
         // as normal, we cannot indicate that these elements are grouped together.
         value.serialize(&mut **self)
@@ -1267,7 +1441,8 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTuple for &'a mut Seria
 
     fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         // From a serialization standpoint, we just serialize each value in a tuple
         // as normal, we cannot indicate that these elements are grouped together.
         // (Same as for a sequence.)
@@ -1279,14 +1454,17 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTuple for &'a mut Seria
     }
 }
 
-impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTupleStruct for &'a mut Serializer<'f, W, F> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTupleStruct
+    for &'a mut Serializer<'f, W, F>
+{
     type Ok = ();
 
     type Error = SError;
 
     fn serialize_field<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         // From a serialization standpoint, we just serialize each value in a tuple
         // struct as normal, we cannot indicate that these elements are grouped together.
         // (Same as for a sequence.)
@@ -1298,14 +1476,17 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTupleStruct for &'a mut
     }
 }
 
-impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTupleVariant for &'a mut Serializer<'f, W, F> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTupleVariant
+    for &'a mut Serializer<'f, W, F>
+{
     type Ok = ();
 
     type Error = SError;
 
     fn serialize_field<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         // From a serialization standpoint, we just serialize each value in a tuple
         // variant as normal, we cannot indicate that these elements are grouped together.
         // (Same as for a sequence.)
@@ -1317,7 +1498,6 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeTupleVariant for &'a mu
     }
 }
 
-
 impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeMap for &'a mut Serializer<'f, W, F> {
     type Ok = ();
 
@@ -1325,14 +1505,15 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeMap for &'a mut Seriali
 
     fn serialize_key<T: ?Sized>(&mut self, key: &T) -> Result<(), Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         if self.fields.is_some() {
             // This is weird, but since all we know about key is that it is serializable
             // the best we can do is serialize it to a string and check against the field
             // names
             let fmt = FortFormat::parse("(a512)").unwrap();
-            let key_string = to_string(key, &fmt)
-                .map_err(|e| SError::KeyToFieldError(Arc::new(e)))?;
+            let key_string =
+                to_string(key, &fmt).map_err(|e| SError::KeyToFieldError(Arc::new(e)))?;
             self.serialize_key_helper(key_string.trim())
         } else {
             Ok(())
@@ -1341,7 +1522,8 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeMap for &'a mut Seriali
 
     fn serialize_value<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         self.serialize_value_helper(value)
     }
 
@@ -1364,7 +1546,8 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeStruct for &'a mut Seri
         value: &T,
     ) -> Result<(), Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         if self.fields.is_some() {
             self.serialize_key_helper(key)?;
         }
@@ -1376,7 +1559,9 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeStruct for &'a mut Seri
     }
 }
 
-impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeStructVariant for &'a mut Serializer<'f, W, F> {
+impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeStructVariant
+    for &'a mut Serializer<'f, W, F>
+{
     type Ok = ();
 
     type Error = SError;
@@ -1387,7 +1572,8 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeStructVariant for &'a m
         value: &T,
     ) -> Result<(), Self::Error>
     where
-        T: serde::Serialize {
+        T: serde::Serialize,
+    {
         if self.fields.is_some() {
             self.serialize_key_helper(key)?;
         }
@@ -1401,14 +1587,19 @@ impl<'a, 'f, W: Write + 'f, F: AsRef<str>> ser::SerializeStructVariant for &'a m
 
 pub(crate) fn serialize_logical<W: Write>(v: bool, width: u32, mut buf: W) -> SResult<()> {
     let b = if v { b"T" } else { b"F" };
-    for _ in 0..width-1 {
+    for _ in 0..width - 1 {
         buf.write(b" ")?;
     }
     buf.write(b)?;
     Ok(())
 }
 
-pub(crate) fn serialize_characters<W: Write>(v: &[u8], width: Option<u32>, mut buf: W, left_align: bool) -> SResult<()> {
+pub(crate) fn serialize_characters<W: Write>(
+    v: &[u8],
+    width: Option<u32>,
+    mut buf: W,
+    left_align: bool,
+) -> SResult<()> {
     if let Some(width) = width {
         let w = width as usize;
         if v.len() >= w {
@@ -1418,7 +1609,7 @@ pub(crate) fn serialize_characters<W: Write>(v: &[u8], width: Option<u32>, mut b
             for _ in 0..(w - v.len()) {
                 buf.write(b" ")?;
             }
-        } else { 
+        } else {
             for _ in 0..(w - v.len()) {
                 buf.write(b" ")?;
             }
@@ -1436,9 +1627,9 @@ pub(crate) fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
     width: u32,
     zeros: Option<u32>,
     base: IntBase,
-    mut buf: W, 
-    abs_value: I, 
-    is_neg: bool
+    mut buf: W,
+    abs_value: I,
+    is_neg: bool,
 ) -> SResult<()> {
     // wish that this didn't require allocating a vector, but I think this is the cleanest way
     // to handle this, since we need to know the length of the serialized number before we
@@ -1446,21 +1637,37 @@ pub(crate) fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
     let (s, is_dec): (Vec<u8>, bool) = match base {
         IntBase::Decimal => {
             let mut b = itoa::Buffer::new();
-            (b.format(abs_value).as_bytes().into_iter().copied().collect(), true)
-        },
-        IntBase::Octal => {
-            (format!("{abs_value:o}").as_bytes().into_iter().copied().collect(), false)
-        },
-        IntBase::Hexadecimal => {
-            (format!("{abs_value:X}").as_bytes().into_iter().copied().collect(), false)
-        },
+            (
+                b.format(abs_value)
+                    .as_bytes()
+                    .into_iter()
+                    .copied()
+                    .collect(),
+                true,
+            )
+        }
+        IntBase::Octal => (
+            format!("{abs_value:o}")
+                .as_bytes()
+                .into_iter()
+                .copied()
+                .collect(),
+            false,
+        ),
+        IntBase::Hexadecimal => (
+            format!("{abs_value:X}")
+                .as_bytes()
+                .into_iter()
+                .copied()
+                .collect(),
+            false,
+        ),
     };
-    
 
     let nsign = if is_neg { 1 } else { 0 };
     let nzeros = zeros.map(|n| n.saturating_sub(s.len() as u32)).unwrap_or(0);
     let nchar = nzeros + nsign + s.len() as u32;
-    
+
     let bad_output = nchar > width || (is_neg && !is_dec);
     if bad_output {
         for _ in 0..width {
@@ -1479,21 +1686,36 @@ pub(crate) fn serialize_integer<W: Write, I: itoa::Integer + Octal + UpperHex>(
         }
         buf.write(&s)?;
     }
-    
+
     Ok(())
 }
 
-pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32) -> SResult<()> {
+/// Wrapper around ryu_floating_decimal::d2d that correctly handles
+/// a value of 0.
+fn d2d_helper(v: f64) -> ryu_floating_decimal::FloatingDecimal64 {
+    if v == 0.0 {
+        ryu_floating_decimal::FloatingDecimal64 {
+            mantissa: 0,
+            exponent: 0,
+        }
+    } else {
+        d2d(v)
+    }
+}
+
+pub(crate) fn serialize_real_f<W: Write>(
+    mut buf: W,
+    v: f64,
+    width: u32,
+    precision: u32,
+    scale: i32,
+) -> SResult<()> {
     let v_is_neg = v < 0.0;
     let signed_prec = precision as i32;
     let rv = (v * 10.0_f64.powi(signed_prec)).round_ties_even() * 10.0_f64.powi(-signed_prec);
 
-    let v = if rv == 0.0 {
-        ryu_floating_decimal::FloatingDecimal64{ mantissa: 0, exponent: 0 }
-    } else { 
-        d2d(rv) 
-    };
-    
+    let v = d2d_helper(rv);
+
     let mut b = itoa::Buffer::new();
     let s = b.format(v.mantissa);
     let m_bytes = s.as_bytes();
@@ -1502,7 +1724,11 @@ pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precisi
     // For all numbers, we need the decimal place and the numbers after it. For negative numbers,
     // we also need the negative sign.
     let width = width as usize;
-    let n_reserved = if v_is_neg { 2 + precision } else { 1 + precision } as usize;
+    let n_reserved = if v_is_neg {
+        2 + precision
+    } else {
+        1 + precision
+    } as usize;
 
     // Now we need to figure out how many digits to include before the decimal. Some examples:
     // Value    | Mantissa | n_bytes | Exponent | # leading digits |
@@ -1519,13 +1745,12 @@ pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precisi
 
     // Now we have enough information to tell if the value is too wide.
     let exp_plus_scale = (exponent + scale) as isize;
-    let n_leading_digits = m_bytes.len()
-        .saturating_add_signed(exp_plus_scale);
+    let n_leading_digits = m_bytes.len().saturating_add_signed(exp_plus_scale);
     if n_leading_digits + n_reserved > width {
         for _ in 0..width {
             buf.write(b"*")?;
         }
-        return Ok(())
+        return Ok(());
     }
 
     let wants_leading_zero = n_leading_digits == 0;
@@ -1536,7 +1761,6 @@ pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precisi
     } else {
         (0, false)
     };
-
 
     let zeros_after_decimal = if exp_plus_scale >= 0 {
         0
@@ -1565,7 +1789,7 @@ pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precisi
             }
         }
         let i = i as usize;
-        let c = m_bytes.get(i..i+1).unwrap_or(b"0");
+        let c = m_bytes.get(i..i + 1).unwrap_or(b"0");
         buf.write(c)?;
     }
 
@@ -1580,15 +1804,22 @@ pub(crate) fn serialize_real_f<W: Write>(mut buf: W, v: f64, width: u32, precisi
     Ok(())
 }
 
-
-pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, precision: u32, scale: i32, exp_ch: &str, n_exp_digits: Option<u32>) -> SResult<()> {
+pub(crate) fn serialize_real_exp<W: Write>(
+    mut buf: W,
+    v: f64,
+    width: u32,
+    precision: u32,
+    scale: i32,
+    exp_ch: &str,
+    n_exp_digits: Option<u32>,
+) -> SResult<()> {
     let v_is_neg = v < 0.0;
     let v_orig = v;
-    let v = d2d(v);
-    
+    let v = d2d_helper(v);
+
     // This is complicated so some examples using e12.3 as the format
-    // Value    | Mantissa | Exponent | Fortran   | Representation 
-    // 3.14     | 314      | -2       | 0.314E+01 | (mantissa // 10^3).(mantissa % 10^3)E(exponent+3) 
+    // Value    | Mantissa | Exponent | Fortran   | Representation
+    // 3.14     | 314      | -2       | 0.314E+01 | (mantissa // 10^3).(mantissa % 10^3)E(exponent+3)
     // 0.0314   | 314      | -4       | 0.314E-01 | (mantissa // 10^3).(mantissa % 10^3)E(exponent+3)
     // 3140.0   | 314      | +1       | 0.314E+04 | (mantissa // 10^3).(mantissa % 10^3)E(exponent+3)
     // 3141.59  | 314159   | -2       | 0.314E+04 | (mantissa // 10^6).(mantissa % 10^6)E(exponent+6)
@@ -1607,14 +1838,21 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
     // so ilog10 + 1 is how many digits the mantissa has. If we have `n` digits, then we need to round the mantissa
     // to the nearest 10^n.
     let n_digits_avail = ((precision as i32) + scale).max(0) as u32;
-    let n_digits_wanted = v.mantissa.ilog10() + 1;
+    let n_digits_wanted = if v.mantissa == 0 {
+        // .ilog10() will panic if called on a 0, but if the value was 0,
+        // we want 1 digit before the decimal point by default.
+        1
+    } else {
+        v.mantissa.ilog10() + 1
+    };
+
     let mantissa = if n_digits_wanted <= n_digits_avail || v.mantissa == 0 {
         v.mantissa
     } else {
         let m = 10u64.pow(n_digits_wanted - n_digits_avail);
         let r = v.mantissa % m;
         let round_down = if r == m / 2 {
-            // Halfway case; always round towards the number that will be even in the least 
+            // Halfway case; always round towards the number that will be even in the least
             // significant remaining digit. E.g. if the mantissa is 31415 and we can have 4
             // sig figs, then is the mantissa / m and modulo 2 (31415 / 10 = 3141 % 2 = 1) odd or even?
             (v.mantissa / m) % 2 == 0
@@ -1622,8 +1860,9 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
             r < m / 2
         };
 
-        let tmp = v.mantissa.checked_next_multiple_of(m)
-            .ok_or_else(|| SError::SerializationFailure(format!("overflow while rounding {v_orig}")))?;
+        let tmp = v.mantissa.checked_next_multiple_of(m).ok_or_else(|| {
+            SError::SerializationFailure(format!("overflow while rounding {v_orig}"))
+        })?;
         if round_down {
             tmp - m
         } else {
@@ -1633,13 +1872,19 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
     let mut b = itoa::Buffer::new();
     let s = b.format(mantissa);
     let m_bytes = s.as_bytes();
-    
-    
-    let exponent = v.exponent + m_bytes.len() as i32 - scale;
+
+    let exponent = if v.mantissa == 0 {
+        // Values of 0 seem to be a special case in fortran
+        // (at least for gfortran) - the exponent will always
+        // be 0 no matter what the scaling.
+        0
+    } else {
+        v.exponent + m_bytes.len() as i32 - scale
+    };
     let mut b = itoa::Buffer::new();
     let s = b.format(exponent.abs());
     let e_bytes = s.as_bytes();
-    
+
     // Include precision # digits, plus decimal point, and the exponent. If the number of digits
     // in the exponent isn't given, it will always be 4 characters wide. (If it needs three digits,
     // the 'E' or 'D' is dropped.) Otherwise it seems to be 2 for the E+ or E- and the number of digits.
@@ -1649,7 +1894,7 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
             for _ in 0..width {
                 buf.write(b"*")?;
             }
-            return Ok(())
+            return Ok(());
         }
         n + 2
     } else {
@@ -1657,11 +1902,15 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
             for _ in 0..width {
                 buf.write(b"*")?;
             }
-            return Ok(())
+            return Ok(());
         }
         4
     };
-    let min_width = if v_is_neg { precision + 2 + exp_nchar } else { precision + 1 + exp_nchar};
+    let min_width = if v_is_neg {
+        precision + 2 + exp_nchar
+    } else {
+        precision + 1 + exp_nchar
+    };
     if width < min_width {
         for _ in 0..width {
             buf.write(b"*")?;
@@ -1669,7 +1918,11 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
         return Ok(());
     }
 
-    let nspaces = if width > min_width { width - min_width - 1 } else { 0 };
+    let nspaces = if width > min_width {
+        width - min_width - 1
+    } else {
+        0
+    };
     for _ in 0..nspaces {
         buf.write(b" ")?;
     }
@@ -1681,14 +1934,18 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
     if scale > 0 {
         let mut i = 0;
         for _ in 0..scale {
-            let c = m_bytes.get(i..i+1).unwrap_or(b"0");
+            let c = m_bytes.get(i..i + 1).unwrap_or(b"0");
             buf.write(c)?;
             i += 1;
         }
         buf.write(b".")?;
-        let n_after_decimal = if scale <= 1 { precision } else { precision - scale as u32 + 1};
+        let n_after_decimal = if scale <= 1 {
+            precision
+        } else {
+            precision - scale as u32 + 1
+        };
         for _ in 0..n_after_decimal {
-            let c = m_bytes.get(i..i+1).unwrap_or(b"0");
+            let c = m_bytes.get(i..i + 1).unwrap_or(b"0");
             buf.write(c)?;
             i += 1;
         }
@@ -1704,7 +1961,7 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
                 buf.write(b"0")?;
             } else {
                 let j = (i + scale) as usize;
-                let c = m_bytes.get(j..j+1).unwrap_or(b"0");
+                let c = m_bytes.get(j..j + 1).unwrap_or(b"0");
                 buf.write(c)?;
             }
             i += 1;
@@ -1730,7 +1987,6 @@ pub(crate) fn serialize_real_exp<W: Write>(mut buf: W, v: f64, width: u32, preci
     }
     buf.write(e_bytes)?;
 
-
     Ok(())
 }
 
@@ -1744,20 +2000,20 @@ mod tests {
     struct Test {
         a: &'static str,
         b: i32,
-        c: f64
+        c: f64,
     }
 
     #[derive(Debug, serde::Serialize)]
     struct HasFlat {
         name: &'static str,
         #[serde(flatten)]
-        data: HashMap<String, i32>
+        data: HashMap<String, i32>,
     }
 
     #[derive(Debug, serde::Serialize)]
     struct Nested {
         db_id: i64,
-        inner: Test
+        inner: Test,
     }
 
     #[test]
@@ -1982,6 +2238,72 @@ mod tests {
         let fmt = FortFormat::parse("(1pe12.4)").unwrap();
         let s = to_string(9.8765e35, &fmt).unwrap();
         assert_eq!(s, "  9.8765E+35");
+
+        // Extra checks for a number with only 1 sig fig to make sure there
+        // aren't edge cases.
+        let fmt = FortFormat::parse("(e12.4)").unwrap();
+        let s = to_string(1.0, &fmt).unwrap();
+        assert_eq!(s, "  0.1000E+01");
+
+        let fmt = FortFormat::parse("(1pe12.4)").unwrap();
+        let s = to_string(1.0, &fmt).unwrap();
+        assert_eq!(s, "  1.0000E+00");
+
+        let fmt = FortFormat::parse("(2pe12.4)").unwrap();
+        let s = to_string(1.0, &fmt).unwrap();
+        assert_eq!(s, "  10.000E-01");
+
+        let fmt = FortFormat::parse("(-1pe12.4)").unwrap();
+        let s = to_string(1.0, &fmt).unwrap();
+        assert_eq!(s, "  0.0100E+02");
+
+        let fmt = FortFormat::parse("(-2pe12.4)").unwrap();
+        let s = to_string(1.0, &fmt).unwrap();
+        assert_eq!(s, "  0.0010E+03");
+
+        let fmt = FortFormat::parse("(e12.4)").unwrap();
+        let s = to_string(-1.0, &fmt).unwrap();
+        assert_eq!(s, " -0.1000E+01");
+
+        let fmt = FortFormat::parse("(1pe12.4)").unwrap();
+        let s = to_string(-1.0, &fmt).unwrap();
+        assert_eq!(s, " -1.0000E+00");
+
+        let fmt = FortFormat::parse("(2pe12.4)").unwrap();
+        let s = to_string(-1.0, &fmt).unwrap();
+        assert_eq!(s, " -10.000E-01");
+
+        let fmt = FortFormat::parse("(-1pe12.4)").unwrap();
+        let s = to_string(-1.0, &fmt).unwrap();
+        assert_eq!(s, " -0.0100E+02");
+
+        let fmt = FortFormat::parse("(-2pe12.4)").unwrap();
+        let s = to_string(-1.0, &fmt).unwrap();
+        assert_eq!(s, " -0.0010E+03");
+
+        // Edge cases
+        // First, a value of exactly 0 caused a crash in v0.1.1 because the mantissa
+        // became 0 and thus the ilog10 value could not be calculated. (In debug mode,
+        // this manifested as an overflow subtraction panic in ryu.)
+        let fmt = FortFormat::parse("(e12.4)").unwrap();
+        let s = to_string(0.0, &fmt).unwrap();
+        assert_eq!(s, "  0.0000E+00");
+
+        let fmt = FortFormat::parse("(1pe12.4)").unwrap();
+        let s = to_string(0.0, &fmt).unwrap();
+        assert_eq!(s, "  0.0000E+00");
+
+        let fmt = FortFormat::parse("(2pe12.4)").unwrap();
+        let s = to_string(0.0, &fmt).unwrap();
+        assert_eq!(s, "  00.000E+00");
+
+        let fmt = FortFormat::parse("(-1pe12.4)").unwrap();
+        let s = to_string(0.0, &fmt).unwrap();
+        assert_eq!(s, "  0.0000E+00");
+
+        let fmt = FortFormat::parse("(-2pe12.4)").unwrap();
+        let s = to_string(0.0, &fmt).unwrap();
+        assert_eq!(s, "  0.0000E+00");
     }
 
     #[test]
@@ -2004,12 +2326,32 @@ mod tests {
         let s = to_string(3.14, &fmt).unwrap();
         assert_eq!(s, "   0.003D+03");
 
+        // Check edge case for 0
+        let fmt = FortFormat::parse("(d12.4)").unwrap();
+        let s = to_string(0.0, &fmt).unwrap();
+        assert_eq!(s, "  0.0000D+00");
+
+        let fmt = FortFormat::parse("(1pd12.4)").unwrap();
+        let s = to_string(0.0, &fmt).unwrap();
+        assert_eq!(s, "  0.0000D+00");
+
+        let fmt = FortFormat::parse("(2pd12.4)").unwrap();
+        let s = to_string(0.0, &fmt).unwrap();
+        assert_eq!(s, "  00.000D+00");
+
+        let fmt = FortFormat::parse("(-1pd12.4)").unwrap();
+        let s = to_string(0.0, &fmt).unwrap();
+        assert_eq!(s, "  0.0000D+00");
+
+        let fmt = FortFormat::parse("(-2pd12.4)").unwrap();
+        let s = to_string(0.0, &fmt).unwrap();
+        assert_eq!(s, "  0.0000D+00");
     }
 
     #[test]
     fn test_vec() {
         let fmt = FortFormat::parse("(i3.3,1x,i4.4,1x,i5.5)").unwrap();
-        let s = to_string(vec![10,200,3000], &fmt).unwrap();
+        let s = to_string(vec![10, 200, 3000], &fmt).unwrap();
         assert_eq!(s, "010 0200 03000");
     }
 
@@ -2023,7 +2365,11 @@ mod tests {
     #[test]
     fn test_struct_by_order() {
         let fmt = FortFormat::parse("(a6,1x,i3,1x,e8.3)").unwrap();
-        let value = Test { a: "Hello", b: 42, c: 3.14 };
+        let value = Test {
+            a: "Hello",
+            b: 42,
+            c: 3.14,
+        };
         let s = to_string(value, &fmt).unwrap();
         assert_eq!(s, " Hello  42 .314E+01");
     }
@@ -2031,20 +2377,20 @@ mod tests {
     #[test]
     fn test_struct_by_name() {
         let fmt = FortFormat::parse("(i3,1x,e8.3,1x,a6)").unwrap();
-        let value = Test { a: "Hello", b: 42, c: 3.14 };
+        let value = Test {
+            a: "Hello",
+            b: 42,
+            c: 3.14,
+        };
         let s = to_string_with_fields(value, &fmt, &["b", "c", "a"]).unwrap();
         assert_eq!(s, " 42 .314E+01  Hello");
     }
 
     #[test]
     fn test_map_by_name() {
-        let value = HashMap::from([
-            ("a", 2),
-            ("b", 4),
-            ("c", 8)
-        ]);
+        let value = HashMap::from([("a", 2), ("b", 4), ("c", 8)]);
         let fmt = FortFormat::parse("(3i2)").unwrap();
-        let s= to_string_with_fields(value, &fmt, &["b", "a", "c"]).unwrap();
+        let s = to_string_with_fields(value, &fmt, &["b", "a", "c"]).unwrap();
         assert_eq!(s, " 4 2 8");
     }
 
@@ -2054,7 +2400,7 @@ mod tests {
             ("co2".to_string(), 400_000),
             ("ch4".to_string(), 1900),
             ("n2o".to_string(), 310),
-            ("co".to_string(), 100)
+            ("co".to_string(), 100),
         ]);
         let value = HasFlat { name: "pa", data };
         let fmt = FortFormat::parse("(a2,4(1x,i6))").unwrap();
@@ -2064,7 +2410,11 @@ mod tests {
 
     #[test]
     fn test_nested_struct_by_order() {
-        let inner = Test { a: "Hello", b: 42, c: 3.14 };
+        let inner = Test {
+            a: "Hello",
+            b: 42,
+            c: 3.14,
+        };
         let value = Nested { db_id: 1, inner };
         let fmt = FortFormat::parse("(i2,1x,a5,1x,i2,1x,e8.3)").unwrap();
         let s = to_string(value, &fmt).unwrap();
@@ -2073,7 +2423,11 @@ mod tests {
 
     #[test]
     fn test_nested_struct_by_name() {
-        let inner = Test { a: "Hello", b: 42, c: 3.14 };
+        let inner = Test {
+            a: "Hello",
+            b: 42,
+            c: 3.14,
+        };
         let value = Nested { db_id: 1, inner };
         let fmt = FortFormat::parse("(e8.3,1x,i2,1x,a5,1x,i1)").unwrap();
         // this gives a "missing field 'inner' error", which is what we expected for now.
@@ -2092,7 +2446,7 @@ mod tests {
         let ex_vec = vec![External::Alpha(12), External::Beta(24)];
         let ex_ff = FortFormat::parse("(2(a6,i3))").unwrap();
         let ex_s = to_string(&ex_vec, &ex_ff).unwrap();
-        assert_eq!(ex_s, " Alpha 12  Beta 24");        
+        assert_eq!(ex_s, " Alpha 12  Beta 24");
     }
 
     #[test]
@@ -2100,22 +2454,18 @@ mod tests {
         #[derive(Debug, serde::Serialize)]
         #[serde(tag = "type")]
         enum Internal {
-            Alpha{value: i32},
-            Beta{value: i32},
+            Alpha { value: i32 },
+            Beta { value: i32 },
         }
 
-        let in_vec = vec![Internal::Alpha{value: 12}, Internal::Beta{value: 24}];
+        let in_vec = vec![Internal::Alpha { value: 12 }, Internal::Beta { value: 24 }];
         let in_ff = FortFormat::parse("(2(a6,i3))").unwrap();
         let in_s = to_string(&in_vec, &in_ff).unwrap();
         assert_eq!(in_s, " Alpha 12  Beta 24");
 
         let fields = ["type", "value"];
         let ff = FortFormat::parse("(a5,1x,i2)").unwrap();
-        let s = to_string_with_fields(
-            Internal::Alpha { value: 42 },
-            &ff,
-            &fields
-        ).unwrap();
+        let s = to_string_with_fields(Internal::Alpha { value: 42 }, &ff, &fields).unwrap();
         // TODO: ideally we want the tag field to be sorted according to the field names
         // - need to better understand how different enum representations are handled.
         assert_ne!(s, "42 Alpha");
@@ -2158,9 +2508,9 @@ mod tests {
         enum InstrumentValue {
             Nothing,
             Value(f32),
-            ValueWithError(f32, f32)
+            ValueWithError(f32, f32),
         }
-        
+
         impl From<InstrumentValue> for String {
             fn from(value: InstrumentValue) -> Self {
                 match value {
@@ -2174,7 +2524,7 @@ mod tests {
         let values = [
             InstrumentValue::Nothing,
             InstrumentValue::Value(1.0),
-            InstrumentValue::ValueWithError(2.0, 0.2)
+            InstrumentValue::ValueWithError(2.0, 0.2),
         ];
         let ff = FortFormat::parse("(3a12)").unwrap();
         let s = to_string(values, &ff).unwrap();
@@ -2184,38 +2534,62 @@ mod tests {
     #[test]
     fn test_none_default_fill() {
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
-        let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
+        let value: (
+            Option<String>,
+            Option<String>,
+            Option<bool>,
+            Option<i32>,
+            Option<f32>,
+        ) = (None, None, None, None, None);
         let s = to_string(value, &fmt).unwrap();
         assert_eq!(s, "* *** * ***** ********");
     }
 
     #[test]
     fn test_none_string_fill() {
-        let settings = SerSettings::default()
-            .fill_method(NoneFill::String("FILL_VAL".as_bytes().to_vec()));
-        
+        let settings =
+            SerSettings::default().fill_method(NoneFill::String("FILL_VAL".as_bytes().to_vec()));
+
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
-        let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
+        let value: (
+            Option<String>,
+            Option<String>,
+            Option<bool>,
+            Option<i32>,
+            Option<f32>,
+        ) = (None, None, None, None, None);
         let s = to_string_custom::<_, &str>(value, &fmt, None, &settings).unwrap();
         assert_eq!(s, "F FIL F FILL_ FILL_VAL");
     }
 
     #[test]
     fn test_none_partial_typed_fill() {
-        let settings = SerSettings::default()
-            .fill_method(NoneFill::new_partial_typed(-999, -999.999));
+        let settings =
+            SerSettings::default().fill_method(NoneFill::new_partial_typed(-999, -999.999));
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
-        let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
+        let value: (
+            Option<String>,
+            Option<String>,
+            Option<bool>,
+            Option<i32>,
+            Option<f32>,
+        ) = (None, None, None, None, None);
         let s = to_string_custom::<_, &str>(value, &fmt, None, &settings).unwrap();
         assert_eq!(s, "* *** *  -999 -999.999");
     }
 
     #[test]
     fn test_none_typed_fill() {
-        let settings = SerSettings::default()
-            .fill_method(NoneFill::new_typed(false, -999, -999.999, "N/A"));
+        let settings =
+            SerSettings::default().fill_method(NoneFill::new_typed(false, -999, -999.999, "N/A"));
         let fmt = FortFormat::parse("(a,1x,a3,1x,l1,1x,i5,1x,f8.3)").unwrap();
-        let value: (Option<String>, Option<String>, Option<bool>, Option<i32>, Option<f32>) = (None, None, None, None, None);
+        let value: (
+            Option<String>,
+            Option<String>,
+            Option<bool>,
+            Option<i32>,
+            Option<f32>,
+        ) = (None, None, None, None, None);
         let s = to_string_custom::<_, &str>(value, &fmt, None, &settings).unwrap();
         assert_eq!(s, "N/A N/A F  -999 -999.999");
     }
@@ -2241,21 +2615,44 @@ mod tests {
         ];
         let fmt = FortFormat::parse("(a2,1x,f7.3,1x,f8.3)").unwrap();
         let mut buf = vec![];
-        many_to_writer_custom::<_, _, &str>(&values, &fmt, None, &SerSettings::default(), &mut buf).unwrap();
+        many_to_writer_custom::<_, _, &str>(&values, &fmt, None, &SerSettings::default(), &mut buf)
+            .unwrap();
         let s = String::from_utf8(buf).unwrap();
-        assert_eq!(s, "pa  45.945  -90.273\ndb -12.450  130.930\nlh -45.038  169.684\n");
+        assert_eq!(
+            s,
+            "pa  45.945  -90.273\ndb -12.450  130.930\nlh -45.038  169.684\n"
+        );
     }
 
     #[test]
     fn test_multi_rec_struct_write() {
         let values = [
-            Test { a: "alpha", b: 1, c: 100.0 },
-            Test { a: "beta", b: 2, c: 200.0 },
-            Test { a: "gamma", b: 3, c: 300.0 },
+            Test {
+                a: "alpha",
+                b: 1,
+                c: 100.0,
+            },
+            Test {
+                a: "beta",
+                b: 2,
+                c: 200.0,
+            },
+            Test {
+                a: "gamma",
+                b: 3,
+                c: 300.0,
+            },
         ];
         let fmt = FortFormat::parse("(i1,1x,f5.1,1x,a5)").unwrap();
         let mut buf = vec![];
-        many_to_writer_custom(&values, &fmt, Some(&["b", "c", "a"]), &SerSettings::default(), &mut buf).unwrap();
+        many_to_writer_custom(
+            &values,
+            &fmt,
+            Some(&["b", "c", "a"]),
+            &SerSettings::default(),
+            &mut buf,
+        )
+        .unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s, "1 100.0 alpha\n2 200.0  beta\n3 300.0 gamma\n");
     }
@@ -2278,10 +2675,10 @@ mod tests {
         #[derive(Debug, serde::Serialize)]
         struct Test1 {
             s: &'static str,
-            n: i32
+            n: i32,
         }
 
-        let values = Test1{ s: "abcde", n: 42 };
+        let values = Test1 { s: "abcde", n: 42 };
         let s = to_string_custom::<_, &str>(&values, &fmt, None, &settings).unwrap();
         assert_eq!(s, "abcde   42");
 
@@ -2294,7 +2691,8 @@ mod tests {
         assert_eq!(s, "abcde   42\n");
 
         let mut buf = vec![];
-        to_writer_custom::<_, _, &str>(&values, &fmt, Some(&["s", "n"]), &settings, &mut buf).unwrap();
+        to_writer_custom::<_, _, &str>(&values, &fmt, Some(&["s", "n"]), &settings, &mut buf)
+            .unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s, "abcde   42\n");
 
@@ -2302,10 +2700,13 @@ mod tests {
         #[derive(Debug, serde::Serialize)]
         struct Test2 {
             s: String,
-            n: i32
+            n: i32,
         }
 
-        let values = Test2{ s: "abcde".to_string(), n: 42 };
+        let values = Test2 {
+            s: "abcde".to_string(),
+            n: 42,
+        };
         let s = to_string_custom::<_, &str>(&values, &fmt, None, &settings).unwrap();
         assert_eq!(s, "abcde   42");
 
@@ -2318,7 +2719,8 @@ mod tests {
         assert_eq!(s, "abcde   42\n");
 
         let mut buf = vec![];
-        to_writer_custom::<_, _, &str>(&values, &fmt, Some(&["s", "n"]), &settings, &mut buf).unwrap();
+        to_writer_custom::<_, _, &str>(&values, &fmt, Some(&["s", "n"]), &settings, &mut buf)
+            .unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s, "abcde   42\n");
 
@@ -2326,10 +2728,10 @@ mod tests {
         #[derive(Debug, serde::Serialize)]
         struct Test3 {
             #[serde(flatten)]
-            inner: Test2
+            inner: Test2,
         }
 
-        let values = Test3{ inner: values };
+        let values = Test3 { inner: values };
         let s = to_string_custom::<_, &str>(&values, &fmt, None, &settings).unwrap();
         assert_eq!(s, "abcde   42");
 
@@ -2342,25 +2744,24 @@ mod tests {
         assert_eq!(s, "abcde   42\n");
 
         let mut buf = vec![];
-        to_writer_custom::<_, _, &str>(&values, &fmt, Some(&["s", "n"]), &settings, &mut buf).unwrap();
+        to_writer_custom::<_, _, &str>(&values, &fmt, Some(&["s", "n"]), &settings, &mut buf)
+            .unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s, "abcde   42\n");
 
         // Finally, confirm that a hash map (as opposed to a defined structure) behaves correctly.
         // Can't reliably test without field names specified because HashMaps are unordered.
         let hfmt = FortFormat::parse("(a8,a2)").unwrap();
-        let values = HashMap::<_, _, std::hash::RandomState>::from_iter(vec![
-            ("s", "abcde"),
-            ("n", "42")
-        ]);
+        let values =
+            HashMap::<_, _, std::hash::RandomState>::from_iter(vec![("s", "abcde"), ("n", "42")]);
 
         let s = to_string_custom::<_, &str>(&values, &hfmt, Some(&["s", "n"]), &settings).unwrap();
         assert_eq!(s, "abcde   42");
 
         let mut buf = vec![];
-        to_writer_custom::<_, _, &str>(&values, &hfmt, Some(&["s", "n"]), &settings, &mut buf).unwrap();
+        to_writer_custom::<_, _, &str>(&values, &hfmt, Some(&["s", "n"]), &settings, &mut buf)
+            .unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert_eq!(s, "abcde   42\n");
-
     }
 }

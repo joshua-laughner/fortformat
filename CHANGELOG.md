@@ -1,5 +1,9 @@
 # Fortformat Changelog
 
+## v0.1.2
+
+Fixed a bug when serializing a value of 0 with an "e" or "d" format specifier.
+
 ## v0.1.1
 
 Added docs.rs metadata to ensure that the documentation for all features is built.
