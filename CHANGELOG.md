@@ -1,5 +1,16 @@
 # Fortformat Changelog
 
+## v0.2.0
+
+Added a serialization option to permit skipping struct fields or map keys
+not listed in the field order slice.
+
+Previously, if you had a struct with fields `alpha` and `beta`, calling a
+function such as `to_string_with_fields` with only `["beta"]` as the `fields`
+argument would produce an error. Now, you can use the `to_*_custom` functions
+with a `SerSettings` instance with `allow_skipped_fields` set to `true` to
+only serialize fields that are included in that list.
+
 ## v0.1.2
 
 Fixed a bug when serializing a value of 0 with an "e" or "d" format specifier.
